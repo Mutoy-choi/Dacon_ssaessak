@@ -1,17 +1,20 @@
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
 import { PromptInput } from './components/PromptInput';
 import { PetSetup } from './components/PetSetup';
 import { PetDashboard } from './components/PetDashboard';
 import { SettingsModal } from './components/SettingsModal';
+import { ThemeToggle } from './components/ThemeToggle';
 import { MenuIcon } from './components/icons';
 import type { Message, Model, PetState, PetType, Emotion, ApiKeys, LogAnalysis } from './types';
-import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection } from './services/llmService';
+import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection, updateLiveExpression } from './services/llmService';
 import { PROVIDERS, LEVEL_THRESHOLDS, LEVEL_NAMES } from './constants';
 import { HATCHI_IMAGE } from './assets/petImages';
 import { buildImagePrompt } from './imagePrompts';
+import { getTheme, setTheme, initTheme, toggleTheme as toggleThemeUtil } from './utils/theme';
+import { triggerLevelUpAnimation, triggerExpGainAnimation, fadeTransition, createParticles } from './utils/animations';
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -23,6 +26,23 @@ const App: React.FC = () => {
   const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [petState, setPetState] = useState<PetState | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKeys>({});
+  const [theme, setThemeState] = useState<'light' | 'dark'>('dark');
+  
+  // Refs for animations
+  const petImageRef = useRef<HTMLImageElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Initialize theme
+  useEffect(() => {
+    initTheme();
+    setThemeState(getTheme());
+  }, []);
+
+  // Toggle theme handler
+  const handleThemeToggle = useCallback(() => {
+    const newTheme = toggleThemeUtil();
+    setThemeState(newTheme);
+  }, []);
 
   useEffect(() => {
     try {
@@ -49,6 +69,11 @@ const App: React.FC = () => {
 
   const addSystemMessage = (content: string, logAnalysis?: LogAnalysis) => {
     setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content, logAnalysis }]);
+    
+    // Trigger EXP animation if XP is gained
+    if (logAnalysis?.xp && containerRef.current) {
+      triggerExpGainAnimation(containerRef.current, logAnalysis.xp);
+    }
   };
 
   const handlePetSetup = useCallback(async () => {
@@ -130,8 +155,38 @@ const App: React.FC = () => {
                 levelName,
                 baseImage
             );
+            
+            // Animate level up
+            if (petImageRef.current && containerRef.current) {
+                triggerLevelUpAnimation(petImageRef.current);
+                createParticles(containerRef.current, 30);
+            }
+            
+            // Fade transition to new image
+            if (petImageRef.current && newImageUrl) {
+                await fadeTransition(petImageRef.current, newImageUrl, 800);
+            }
+            
             setPetState(prev => prev ? ({ ...prev, imageUrl: newImageUrl }) : null);
             addSystemMessage(`🎉 Congratulations! ${petState.name} reached Level ${newLevel}: ${levelName}!`);
+        }
+        
+        // 4. Real-time expression update (subtle changes)
+        if (!leveledUp && petState.imageUrl) {
+            try {
+                const updatedImage = await updateLiveExpression(
+                    petState.imageUrl,
+                    dominantEmotion,
+                    analysis.emotions[dominantEmotion]
+                );
+                
+                if (updatedImage && petImageRef.current) {
+                    await fadeTransition(petImageRef.current, updatedImage, 400);
+                    setPetState(prev => prev ? ({ ...prev, imageUrl: updatedImage }) : null);
+                }
+            } catch (error) {
+                console.log('Skipping expression update:', error);
+            }
         }
     } catch (error) {
       console.error('Error in handlePetLog:', error);
@@ -227,7 +282,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-900 text-gray-100 font-sans">
+    <div ref={containerRef} className="flex h-screen overflow-hidden bg-gray-900 dark:bg-gray-900 text-gray-100 dark:text-gray-100 font-sans transition-colors duration-300">
       {isDashboardOpen && <PetDashboard petState={petState} onClose={() => setDashboardOpen(false)} />}
       {isSettingsOpen && <SettingsModal apiKeys={apiKeys} setApiKeys={setApiKeys} onClose={() => setSettingsOpen(false)} />}
       <div
@@ -246,10 +301,10 @@ const App: React.FC = () => {
         onSettingsOpen={() => setSettingsOpen(true)}
       />
       <div className="flex flex-1 flex-col">
-        <header className="flex h-16 w-full items-center justify-between border-b border-gray-700 bg-gray-800 px-4 lg:justify-center">
+        <header className="flex h-16 w-full items-center justify-between border-b border-gray-700 dark:border-gray-700 bg-gray-800 dark:bg-gray-800 px-4 lg:justify-center transition-colors duration-300">
           <button
             onClick={() => setSidebarOpen(true)}
-            className="text-gray-300 hover:text-white lg:hidden"
+            className="text-gray-300 hover:text-white lg:hidden transition-smooth"
           >
             <MenuIcon className="h-6 w-6" />
           </button>
@@ -257,12 +312,15 @@ const App: React.FC = () => {
             <h1 className="text-xl font-semibold text-white">{selectedModel.name}</h1>
             <p className="text-xs text-gray-400">Provider: {selectedModel.provider}</p>
           </div>
-          <div className="w-6 lg:hidden"></div>
+          <div className="flex items-center gap-2">
+            <ThemeToggle theme={theme} onToggle={handleThemeToggle} />
+            <div className="w-6 lg:hidden"></div>
+          </div>
         </header>
         <main className="flex-1 overflow-y-auto">
           <ChatWindow messages={messages} />
         </main>
-        <footer className="border-t border-gray-700 bg-gray-800 p-4">
+        <footer className="border-t border-gray-700 dark:border-gray-700 bg-gray-800 dark:bg-gray-800 p-4 transition-colors duration-300">
           <PromptInput 
             prompt={prompt}
             setPrompt={setPrompt}

@@ -111,6 +111,41 @@ export async function generateEmotionExpression(
     return generatePetImage(prompt, baseImage);
 }
 
+/**
+ * 대화 중 감정 분석 후 실시간 표정 업데이트
+ * (Nano Banana 스타일 - 미세한 변화)
+ */
+export async function updateLiveExpression(
+    currentImageUrl: string | null,
+    emotion: string,
+    intensity: number,
+    petType: 'hatchi' = 'hatchi'
+): Promise<string | null> {
+    try {
+        if (!currentImageUrl || !currentImageUrl.startsWith('data:image')) {
+            return null;
+        }
+
+        const [header, data] = currentImageUrl.split(',');
+        const mimeType = header.match(/:(.*?);/)?.[1];
+        
+        if (!data || !mimeType) {
+            return null;
+        }
+
+        const baseImage = { inlineData: { data, mimeType } };
+        
+        // 미세한 표정 변화를 위한 프롬프트 (Nano Banana 스타일)
+        const prompt = buildExpressionPrompt(petType, emotion as any, intensity);
+        const updatedPrompt = `${prompt} IMPORTANT: Make only subtle changes to the facial expression. Keep the overall character design, colors, and style identical. Only adjust eyes, mouth, and minor emotional details.`;
+        
+        return await generatePetImage(updatedPrompt, baseImage);
+    } catch (error) {
+        console.error('Failed to update live expression:', error);
+        return null; // 실패시 기존 이미지 유지
+    }
+}
+
 async function* streamFromApi(endpoint: string, options: RequestInit, responseParser: (json: any) => string | null): AsyncGenerator<string> {
     try {
         const response = await fetch(endpoint, options);

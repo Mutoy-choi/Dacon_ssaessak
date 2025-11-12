@@ -2,6 +2,98 @@
 
 All notable changes to the Saessak (새싹) project will be documented in this file.
 
+## [1.1.0] - 2025-11-12
+
+### 🎉 Major Update - Animation & Theme System
+
+#### ✨ New Features
+
+**🌙 Dark/Light Mode Support**
+- Automatic system theme detection
+- Manual theme toggle button in header
+- Smooth color transitions (0.3s)
+- LocalStorage persistence
+- CSS variable-based theming
+
+**✨ Animation System**
+- Level-up animations (2s scale, rotate, brightness effects)
+- Particle explosion effects (30 colorful particles)
+- Emotion change animations with color glow
+- EXP gain popup animations (+XX EXP text)
+- Image fade transitions (400-800ms)
+- Breathing effect for idle state (3s pulse)
+- Bounce scale, shimmer, and hover effects
+
+**🎭 Real-time Expression Changes (Nano Banana Style)**
+- Live facial expression updates during conversation
+- Emotion-based subtle image editing
+- 10 emotion-specific expressions
+- Maintains design consistency (eyes, mouth only)
+- Async processing (non-blocking)
+- Fallback to current image on error
+
+**🎨 Enhanced Image Prompt System**
+- Emotion descriptors for all 10 emotions
+- Level-specific style guides (11 levels)
+- Event-specific prompts (levelup, milestone, achievement)
+- Expression prompts for real-time changes
+- Background style variations
+
+#### 🛠️ Technical Improvements
+
+**New Files:**
+- `utils/theme.ts` - Theme management system
+- `utils/animations.ts` - Animation utility functions
+- `styles/animations.css` - Animation CSS definitions
+- `components/ThemeToggle.tsx` - Theme toggle button
+- `FEATURES_v1.1.md` - Feature documentation
+
+**Updated Files:**
+- `App.tsx` - Integrated theme and animation systems
+- `index.html` - Added animation CSS, updated meta tags
+- `services/llmService.ts` - Added `updateLiveExpression()` function
+
+**New Animations:**
+- `animate-level-up` - Level up celebration
+- `animate-emotion-change` - Emotion transition
+- `animate-exp-gain` - EXP popup
+- `animate-pulse-breathing` - Idle breathing
+- `animate-bounce-scale` - Bounce effect
+- `glow-effect` - Glowing aura
+- `celebration-particle` - Particle burst
+
+#### 🎨 UI/UX Improvements
+- Theme toggle button in header (sun/moon icons)
+- Smooth color transitions for theme changes
+- GPU-accelerated animations
+- Reduced motion support for accessibility
+- Better visual feedback for interactions
+
+#### 📚 Documentation
+- Added FEATURES_v1.1.md with comprehensive guide
+- Updated CHANGELOG.md
+- Animation timing guidelines
+- Performance optimization notes
+
+### 🐛 Bug Fixes
+- Fixed image transition flickering
+- Improved animation cleanup
+- Enhanced error handling for image generation
+
+### ⚡ Performance
+- CSS variable-based theming (instant updates)
+- GPU-accelerated animations (transform, opacity)
+- Optimized particle effects
+- Lazy image generation (only when needed)
+
+### 🔐 Accessibility
+- Prefers-reduced-motion detection
+- Keyboard-accessible theme toggle
+- ARIA labels for all interactive elements
+- Focus-visible outlines
+
+---
+
 ## [1.0.0] - 2025-11-12
 
 ### 🎉 Initial Release
@@ -67,14 +159,10 @@ All notable changes to the Saessak (새싹) project will be documented in this f
 - Error handling and user-friendly messages
 
 #### 📚 Documentation
-- Comprehensive README.md with:
-  - Project overview and features
-  - Architecture and tech stack
-  - Installation and setup guide
-  - Usage instructions
-  - API documentation
-  - Troubleshooting guide
-  - Roadmap
+- Comprehensive README.md
+- QUICKSTART.md for quick setup
+- CONTRIBUTING.md for contributors
+- PROJECT_SUMMARY.md for overview
 - MIT License
 - .env.local.example template
 
@@ -89,30 +177,19 @@ All notable changes to the Saessak (새싹) project will be documented in this f
 - Improved error handling for image generation
 - Enhanced localStorage error recovery
 
-### 📝 Known Issues
-- Image generation requires Gemini 2.5 Flash Image model access
-- LocalStorage data loss on browser cache clear
-- React/TypeScript compilation warnings (non-blocking)
-
 ---
 
-## [Upcoming - v1.1]
+## [Upcoming - v1.2]
 
 ### Planned Features
-- [ ] Nano Banana model integration for advanced image editing
-- [ ] Real-time expression changes during conversations
-- [ ] Animation effects for level-up and emotion transitions
-- [ ] Dark mode support
+- [ ] Image caching system
+- [ ] Animation customization options
+- [ ] Theme-specific pet skins
 - [ ] Voice conversation support
 - [ ] Multiple pet management
 - [ ] Advanced emotion statistics
 - [ ] Social sharing features
-
-### Improvements
-- [ ] Better error messages and user guidance
-- [ ] Performance optimization for image generation
-- [ ] Enhanced UI/UX with smoother transitions
-- [ ] More detailed emotion patterns analysis
+- [ ] Mobile app version
 
 ---
 
@@ -125,9 +202,6 @@ All notable changes to the Saessak (새싹) project will be documented in this f
 
 ### Contributing
 See CONTRIBUTING.md for guidelines on how to contribute to this project.
-
-### Contact
-For issues, suggestions, or contributions, please open an issue on GitHub.
 
 ---
 
