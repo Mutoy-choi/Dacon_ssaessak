@@ -1,11 +1,19 @@
 import { GoogleGenAI, Modality, Type } from "@google/genai";
-import type { Message, LogAnalysis, PetState, EmotionSet, ApiKeys, Model } from '../types';
+import type { Message, LogAnalysis, PetState, EmotionSet, ApiKeys, Model, PetPersona } from '../types';
 import { LEVEL_NAMES } from '../constants';
 import { buildImagePrompt, buildExpressionPrompt, buildEventPrompt } from '../imagePrompts';
 import { imageCache } from '../utils/imageCache';
 import { conversationCache } from '../utils/conversationCache';
 import { petSkinGenerator, skinSettings, type SkinTheme } from '../utils/petSkins';
 import { trackAPICall } from '../components/PerformanceMonitor';
+import { 
+  buildSystemPrompt, 
+  buildReflectionPrompt,
+  buildPersonaSummaryPrompt,
+  calculateAverageEmotions,
+  getRecentLogs,
+  buildRecentContext
+} from '../utils/personaManager';
 
 // FIX: Updated to exclusively use `process.env.API_KEY` and conform to `new GoogleGenAI({ apiKey: ... })` initialization.
 const getGoogleAI = () => {
@@ -328,13 +336,23 @@ async function* streamFromAnthropic(modelId: string, history: Message[], newProm
 }
 
 // FIX: Removed apiKey parameter to use the centralized `getGoogleAI` function.
-async function* streamFromGemini(modelId: string, history: Message[], newPrompt: string): AsyncGenerator<string> {
+async function* streamFromGemini(
+  modelId: string, 
+  history: Message[], 
+  newPrompt: string,
+  systemInstruction?: string
+): AsyncGenerator<string> {
     const ai = getGoogleAI();
     const geminiHistory = history
         .filter(msg => msg.role !== 'system')
         .map(msg => ({ role: msg.role, parts: [{ text: msg.content }] }));
     try {
-        const chat = ai.chats.create({ model: modelId, history: geminiHistory });
+        const config: any = { model: modelId, history: geminiHistory };
+        if (systemInstruction) {
+          config.systemInstruction = systemInstruction;
+        }
+        
+        const chat = ai.chats.create(config);
         const result = await chat.sendMessageStream({ message: newPrompt });
         for await (const chunk of result) {
             if (chunk.text) yield chunk.text;
@@ -345,10 +363,24 @@ async function* streamFromGemini(modelId: string, history: Message[], newPrompt:
     }
 }
 
-export async function* generateChatResponseStream(model: Model, history: Message[], newPrompt: string, apiKeys: ApiKeys): AsyncGenerator<string> {
+export async function* generateChatResponseStream(
+  model: Model, 
+  history: Message[], 
+  newPrompt: string, 
+  apiKeys: ApiKeys,
+  petState?: PetState
+): AsyncGenerator<string> {
+    // 페르소나 시스템 프롬프트 생성
+    let systemPrompt: string | undefined;
+    if (petState?.persona && model.provider === 'Google Gemini') {
+      const recentContext = buildRecentContext(petState.logHistory);
+      systemPrompt = buildSystemPrompt(petState.persona, recentContext);
+      console.log('🧠 Persona System Prompt 적용:', systemPrompt.slice(0, 100) + '...');
+    }
+
     switch (model.provider) {
         case 'Google Gemini':
-            yield* streamFromGemini(model.id, history, newPrompt);
+            yield* streamFromGemini(model.id, history, newPrompt, systemPrompt);
             break;
         case 'OpenRouter':
             if (!apiKeys.openrouter) { yield "OpenRouter API key is missing."; return; }
@@ -370,16 +402,13 @@ export async function* generateChatResponseStream(model: Model, history: Message
 // FIX: Removed apiKey parameter to use the centralized `getGoogleAI` function.
 export async function* generateReflection(petState: PetState, question: string): AsyncGenerator<string> {
     const ai = getGoogleAI();
-    // FIX: The `PetState` type uses `logHistory` to store logs, not `emotionHistory`. Updated to use the correct property and access the nested `emotions` object.
-    const patterns = petState.logHistory.length >= 3 ? `Detected patterns in recent logs: ${petState.logHistory.slice(-3).every(e => e.emotions.exhaustion > 6) ? 'High exhaustion' : 'None'}` : 'Not enough data for patterns.';
     
-    const levelName = LEVEL_NAMES[petState.level - 1] || "Companion";
-
-    const systemInstruction = `You are ${petState.name}, the user's AI companion, a Level ${petState.level} "${levelName}" ${petState.type}. Your current dominant emotion is ${petState.dominantEmotion}. Answer the user's question from your perspective as their loyal companion. Your voice should be shaped by your level and dominant emotion. For example, a low-level, joyful pet might be simple and encouraging, while a high-level, sad pet might be more philosophical and melancholic. Speak in the first person ("I," "we"). Be supportive and reference your shared journey with the user based on the context provided. Do not provide generic advice; instead, share your feelings and observations as their pet.`;
+    // 페르소나 기반 성찰 프롬프트 생성
+    const systemInstruction = buildReflectionPrompt(petState.persona, petState);
+    console.log('🧘 Reflection Prompt 생성 완료');
     
-    const myContext = `This is what I know about our journey together: I am level ${petState.level}. Key events: ${petState.majorEvents.map(e => e.description).join(', ')}. My dominant emotion right now is ${petState.dominantEmotion}. Recent patterns I've noticed: ${patterns}.`;
-
-    const prompt = `${myContext}\n\nMy human asks me: "${question}"`;
+    const myContext = `최근 우리의 대화를 돌아보면서 당신께 이야기하고 싶어요.`;
+    const prompt = `${myContext}\n\n당신이 묻는 것: "${question}"`;
 
     const stream = await ai.models.generateContentStream({
         model: 'gemini-2.5-pro',
@@ -389,5 +418,60 @@ export async function* generateReflection(petState: PetState, question: string):
 
     for await (const chunk of stream) {
         if (chunk.text) yield chunk.text;
+    }
+}
+
+/**
+ * 페르소나 업데이트 함수 - 10회 대화마다 LLM에게 페르소나 분석 요청
+ */
+export async function updatePersona(petState: PetState): Promise<PetPersona> {
+    const ai = getGoogleAI();
+    const recentLogs = getRecentLogs(petState.logHistory, 10);
+    const prompt = buildPersonaSummaryPrompt(recentLogs, petState.persona);
+    
+    console.log('🔄 페르소나 업데이트 시작... (최근 10개 대화 분석)');
+    
+    try {
+        const result = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: { 
+                responseMimeType: 'application/json',
+                temperature: 0.7
+            }
+        });
+        
+        const responseText = result.text.trim();
+        console.log('📊 LLM 응답:', responseText.slice(0, 200) + '...');
+        
+        // JSON 파싱
+        const summary = JSON.parse(responseText);
+        
+        // 페르소나 업데이트
+        const updatedPersona: PetPersona = {
+            ...petState.persona,
+            growthSummary: summary.growthSummary || petState.persona.growthSummary,
+            userInsight: summary.userInsight || petState.persona.userInsight,
+            coreTraits: summary.newTraits && summary.newTraits.length > 0 
+                ? summary.newTraits 
+                : petState.persona.coreTraits,
+            emotionalProfile: calculateAverageEmotions(recentLogs),
+            conversationCount: petState.persona.conversationCount,
+            lastUpdated: new Date().toISOString()
+        };
+        
+        console.log('✅ 페르소나 업데이트 완료');
+        console.log('  - 새 특성:', updatedPersona.coreTraits);
+        console.log('  - 성장 요약:', updatedPersona.growthSummary.slice(0, 50) + '...');
+        
+        return updatedPersona;
+    } catch (error) {
+        console.error('❌ 페르소나 업데이트 실패:', error);
+        // 실패시 기존 페르소나 유지 (단, 감정 프로필과 타임스탬프는 업데이트)
+        return {
+            ...petState.persona,
+            emotionalProfile: calculateAverageEmotions(recentLogs),
+            lastUpdated: new Date().toISOString()
+        };
     }
 }

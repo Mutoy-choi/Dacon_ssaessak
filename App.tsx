@@ -10,7 +10,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { PerformanceMonitor } from './components/PerformanceMonitor';
 import { MenuIcon } from './components/icons';
 import type { Message, Model, PetState, PetType, Emotion, ApiKeys, LogAnalysis } from './types';
-import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection, updateLiveExpression } from './services/llmService';
+import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection, updateLiveExpression, updatePersona } from './services/llmService';
 import { PROVIDERS, LEVEL_THRESHOLDS, LEVEL_NAMES } from './constants';
 import { HATCHI_IMAGE } from './assets/petImages';
 import { buildImagePrompt } from './imagePrompts';
@@ -18,6 +18,7 @@ import { getTheme, setTheme, initTheme, toggleTheme as toggleThemeUtil } from '.
 import { triggerLevelUpAnimation, triggerExpGainAnimation, fadeTransition, createParticles } from './utils/animations';
 import { imageCache } from './utils/imageCache';
 import { conversationCache } from './utils/conversationCache';
+import { createInitialPersona, shouldUpdatePersona, incrementPersonaCounter } from './utils/personaManager';
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -51,7 +52,15 @@ const App: React.FC = () => {
   useEffect(() => {
     try {
       const savedPet = localStorage.getItem('ame-pet-state');
-      if (savedPet) setPetState(JSON.parse(savedPet));
+      if (savedPet) {
+        const parsed = JSON.parse(savedPet);
+        // 페르소나 마이그레이션: 기존 데이터에 persona 없으면 생성
+        if (!parsed.persona) {
+          console.log('🔄 기존 펫 데이터 마이그레이션: 페르소나 추가');
+          parsed.persona = createInitialPersona(parsed.name || '해치');
+        }
+        setPetState(parsed);
+      }
 
       const savedKeys = localStorage.getItem('ame-api-keys');
       if (savedKeys) setApiKeys(JSON.parse(savedKeys));
@@ -89,9 +98,11 @@ const App: React.FC = () => {
         dominantEmotion: 'joy',
         imageUrl: HATCHI_IMAGE,
         logHistory: [],
-        majorEvents: [{ timestamp: new Date().toISOString(), description: `The journey with 해치 begins!` }]
+        majorEvents: [{ timestamp: new Date().toISOString(), description: `The journey with 해치 begins!` }],
+        persona: createInitialPersona('해치')
     };
     setPetState(initialState);
+    console.log('🎉 해치 탄생! 초기 페르소나 생성 완료');
   }, []);
   
   const handlePetLog = async (log: string) => {
@@ -117,11 +128,16 @@ const App: React.FC = () => {
         
         setPetState(prev => {
             if (!prev) return null;
+            
+            // 페르소나 카운터 증가
+            const updatedPersona = incrementPersonaCounter(prev.persona);
+            
             const updatedState = {
                 ...prev, 
                 exp: newExp, 
                 level: newLevel, 
                 dominantEmotion,
+                persona: updatedPersona,
                 logHistory: [...prev.logHistory, {
                   timestamp: new Date().toISOString(),
                   summary: analysis.query_summary,
@@ -134,6 +150,22 @@ const App: React.FC = () => {
                     description: `Evolved to Level ${newLevel}: ${LEVEL_NAMES[newLevel-1]}`
                 });
             }
+            
+            // 10회마다 페르소나 업데이트 체크
+            if (shouldUpdatePersona(updatedPersona)) {
+                console.log('🔔 10회 대화 도달! 페르소나 업데이트 예정');
+                // 비동기 업데이트는 별도 처리
+                setTimeout(async () => {
+                    try {
+                        const newPersona = await updatePersona(updatedState);
+                        setPetState(current => current ? { ...current, persona: newPersona } : null);
+                        addSystemMessage('💫 해치가 당신과의 대화를 통해 조금 더 성장했어요!');
+                    } catch (error) {
+                        console.error('페르소나 업데이트 실패:', error);
+                    }
+                }, 1000);
+            }
+            
             return updatedState;
         });
         
@@ -223,7 +255,8 @@ const App: React.FC = () => {
     // Pass the full history to the stream function
     const fullHistory = [...messages, ...currentHistory];
 
-    const stream = generateChatResponseStream(selectedModel, fullHistory, prompt, apiKeys);
+    // 페르소나 포함하여 스트림 생성
+    const stream = generateChatResponseStream(selectedModel, fullHistory, prompt, apiKeys, petState);
     for await (const chunk of stream) {
         setMessages(prev =>
         prev.map(msg =>

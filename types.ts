@@ -41,6 +41,17 @@ export interface LogEntry {
     emotions: EmotionSet;
 }
 
+export interface PetPersona {
+  name: string;
+  coreTraits: string[];
+  growthSummary: string;
+  reflectionNotes: string[];
+  emotionalProfile: EmotionSet;
+  userInsight: string;
+  conversationCount: number;
+  lastUpdated: string;
+}
+
 export interface PetState {
   type: PetType;
   name: string;
@@ -50,6 +61,7 @@ export interface PetState {
   imageUrl: string | null;
   logHistory: LogEntry[];
   majorEvents: MajorEvent[];
+  persona: PetPersona;
 }
 
 export interface LogAnalysis {

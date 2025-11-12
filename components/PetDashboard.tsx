@@ -111,6 +111,41 @@ export const PetDashboard: React.FC<PetDashboardProps> = ({ petState, onClose })
                         {emotionProfile.length === 0 && <p className="text-sm text-gray-500">Log your day to build an emotion profile!</p>}
                     </div>
                 </div>
+                
+                {/* 페르소나 정보 섹션 */}
+                <div className="rounded-lg bg-gray-900/50 p-6 mt-6">
+                    <h3 className="text-xl font-semibold mb-3">🧠 {name}의 성장</h3>
+                    <div className="space-y-4">
+                        <div>
+                            <p className="text-sm font-medium text-gray-400 mb-1">현재 성격 특성</p>
+                            <div className="flex flex-wrap gap-2">
+                                {petState.persona.coreTraits.map(trait => (
+                                    <span key={trait} className="px-3 py-1 bg-purple-900/50 text-purple-200 rounded-full text-xs font-medium">
+                                        {trait}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <p className="text-sm font-medium text-gray-400 mb-1">성장 기록</p>
+                            <p className="text-sm text-gray-300 leading-relaxed">{petState.persona.growthSummary}</p>
+                        </div>
+                        
+                        <div>
+                            <p className="text-sm font-medium text-gray-400 mb-1">당신에 대한 이해</p>
+                            <p className="text-sm text-gray-300 leading-relaxed">{petState.persona.userInsight}</p>
+                        </div>
+                        
+                        <div className="pt-2 border-t border-gray-700">
+                            <p className="text-xs text-gray-500">
+                                대화 횟수: {petState.persona.conversationCount}회 
+                                {' | '}
+                                마지막 업데이트: {new Date(petState.persona.lastUpdated).toLocaleDateString('ko-KR')}
+                            </p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             {/* Right Column: Journey Timeline */}
