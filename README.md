@@ -1,5 +1,5 @@
 <div align="center">
-<img src="./image.png" alt="Haechi Character" width="300" />
+<img src="./imagegif.gif" alt="Haechi GIF" width="300" />
 
 # 🌱 Saessak (새싹) - 서울시민을 위한 AI 마음건강 동반자
 
