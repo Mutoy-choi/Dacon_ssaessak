@@ -1,0 +1,134 @@
+# Changelog
+
+All notable changes to the Saessak (새싹) project will be documented in this file.
+
+## [1.0.0] - 2025-11-12
+
+### 🎉 Initial Release
+
+#### ✨ Core Features
+- **Multi AI Model Support**
+  - Google Gemini (2.5 Flash, 2.5 Pro)
+  - OpenAI (GPT-4o, GPT-4o mini, GPT-4 Turbo)
+  - Anthropic (Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku)
+  - OpenRouter (Multiple models integration)
+
+- **Emotion Analysis System**
+  - 10 emotion tracking (joy, sadness, outburst, irritable, timid, anxiety, flustered, envy, boredom, exhaustion)
+  - Automatic emotion scoring (0.0 - 10.0) for each conversation
+  - AI-powered conversation summary
+  - Experience points (XP) generation based on conversation depth (5-25 XP)
+
+- **Level Up & Growth System**
+  - 11-level progression system (Infant → Singularity)
+  - Automatic level-up based on accumulated XP
+  - Dynamic character image generation on level-up
+  - Emotion-based image transformation
+
+- **AI Image Generation**
+  - Gemini 2.5 Flash Image model integration
+  - Pet expression changes based on emotions
+  - Image continuity through base64 editing
+  - Level-specific evolved appearance
+
+- **Self-Reflection & Persona Dialogue**
+  - `/pet reflect [question]` command for deep conversations
+  - Personalized responses based on user's emotion history
+  - Insights generation from major events and emotion patterns
+  - Progressive persona refinement over time
+
+- **Dashboard & Timeline**
+  - Overall emotion profile visualization
+  - Log history and major events timeline
+  - Level progress and XP tracking
+  - Character growth journey recording
+
+#### 🎨 Enhanced Image Prompt System
+- **Emotion-specific descriptors** for 10 different emotions
+- **Level-based style guides** for character evolution
+- **Multiple background styles** for variety
+- **Event-specific prompts** (level-up, milestones, achievements)
+- **Expression prompts** for real-time emotion display
+
+#### 💾 Data Management
+- **Export/Import Backup** functionality
+  - Download pet data as JSON file
+  - Upload backup file to restore data
+  - Version-tracked backup format
+- **Reset All Data** option with confirmation
+- **LocalStorage** for secure client-side data storage
+
+#### 🛠️ Technical Improvements
+- TypeScript-based type-safe development
+- React 19 with modern hooks
+- Vite for fast development and building
+- Markdown support with DOMPurify sanitization
+- Streaming responses for better UX
+- Error handling and user-friendly messages
+
+#### 📚 Documentation
+- Comprehensive README.md with:
+  - Project overview and features
+  - Architecture and tech stack
+  - Installation and setup guide
+  - Usage instructions
+  - API documentation
+  - Troubleshooting guide
+  - Roadmap
+- MIT License
+- .env.local.example template
+
+#### 🔐 Security & Privacy
+- Local-only data storage (no server transmission)
+- API keys stored securely in browser LocalStorage
+- User-owned data with full control
+- No external data transmission except to chosen AI models
+
+### 🐛 Bug Fixes
+- Fixed Gemini API key configuration
+- Improved error handling for image generation
+- Enhanced localStorage error recovery
+
+### 📝 Known Issues
+- Image generation requires Gemini 2.5 Flash Image model access
+- LocalStorage data loss on browser cache clear
+- React/TypeScript compilation warnings (non-blocking)
+
+---
+
+## [Upcoming - v1.1]
+
+### Planned Features
+- [ ] Nano Banana model integration for advanced image editing
+- [ ] Real-time expression changes during conversations
+- [ ] Animation effects for level-up and emotion transitions
+- [ ] Dark mode support
+- [ ] Voice conversation support
+- [ ] Multiple pet management
+- [ ] Advanced emotion statistics
+- [ ] Social sharing features
+
+### Improvements
+- [ ] Better error messages and user guidance
+- [ ] Performance optimization for image generation
+- [ ] Enhanced UI/UX with smoother transitions
+- [ ] More detailed emotion patterns analysis
+
+---
+
+## Development Notes
+
+### Version Scheme
+- Major version: Breaking changes or major feature additions
+- Minor version: New features, backward compatible
+- Patch version: Bug fixes and minor improvements
+
+### Contributing
+See CONTRIBUTING.md for guidelines on how to contribute to this project.
+
+### Contact
+For issues, suggestions, or contributions, please open an issue on GitHub.
+
+---
+
+**Made with 💚 by Team Saessak**
