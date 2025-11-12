@@ -1,7 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { ApiKeys } from '../types';
 import { CloseIcon } from './icons';
 import { downloadBackup, uploadBackup, clearAllData } from '../utils/storage';
+import { imageCache, cacheUtils } from '../utils/imageCache';
+import { conversationCache, conversationCacheUtils } from '../utils/conversationCache';
+import { skinSettings, skinUtils, type SkinTheme } from '../utils/petSkins';
 
 interface SettingsModalProps {
   apiKeys: ApiKeys;
@@ -11,7 +14,21 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKeys, onClose }) => {
   const [keys, setKeys] = useState<ApiKeys>(apiKeys);
+  const [cacheStats, setCacheStats] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'api' | 'data' | 'cache' | 'skin'>('api');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load cache stats
+  useEffect(() => {
+    const loadStats = async () => {
+      const imgStats = await imageCache.getStats();
+      const convStats = conversationCache.getStats();
+      setCacheStats({ image: imgStats, conversation: convStats });
+    };
+    loadStats();
+    const interval = setInterval(loadStats, 5000); // Update every 5s
+    return () => clearInterval(interval);
+  }, []);
 
   const handleSave = () => {
     setApiKeys(keys);
@@ -47,6 +64,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKey
     clearAllData();
   };
 
+  const handleClearImageCache = async () => {
+    if (confirm('이미지 캐시를 전부 삭제하시겠습니까?')) {
+      await imageCache.clear();
+      alert('✅ 이미지 캐시가 삭제되었습니다.');
+      const imgStats = await imageCache.getStats();
+      const convStats = conversationCache.getStats();
+      setCacheStats({ image: imgStats, conversation: convStats });
+    }
+  };
+
+  const handleClearConversationCache = () => {
+    if (confirm('대화 캐시를 전부 삭제하시겠습니까?')) {
+      conversationCache.clear();
+      alert('✅ 대화 캐시가 삭제되었습니다.');
+      const convStats = conversationCache.getStats();
+      setCacheStats((prev: any) => ({ ...prev, conversation: convStats }));
+    }
+  };
+
+  const handleCleanExpiredCache = async () => {
+    const imgRemoved = await imageCache.cleanExpired();
+    const convRemoved = conversationCache.cleanExpired();
+    alert(`✅ 만료된 캐시 삭제 완료!\n이미지: ${imgRemoved}개, 대화: ${convRemoved}개`);
+    
+    const imgStats = await imageCache.getStats();
+    const convStats = conversationCache.getStats();
+    setCacheStats({ image: imgStats, conversation: convStats });
+  };
+
+  const handleThemeChange = (theme: SkinTheme) => {
+    skinSettings.updateTheme(theme);
+    alert(`✅ 테마가 ${skinUtils.formatThemeName(theme)}로 변경되었습니다.\n펫 이미지는 다음 생성부터 적용됩니다.`);
+  };
+
+  const handleToggleAutoSwitch = () => {
+    const newValue = skinSettings.toggleAutoSwitch();
+    alert(`✅ 시스템 테마 자동 전환이 ${newValue ? '활성화' : '비활성화'}되었습니다.`);
+  };
+
+  const handleToggleEnhancedEffects = () => {
+    const newValue = skinSettings.toggleEnhancedEffects();
+    alert(`✅ 강화된 이펙트가 ${newValue ? '활성화' : '비활성화'}되었습니다.`);
+  };
+
   // FIX: Removed Google Gemini from the list of providers to prevent users from adding their own key,
   // in compliance with the guideline to exclusively use `process.env.API_KEY`.
   const providers: { id: keyof ApiKeys; name: string; url: string; placeholder: string }[] = [
@@ -54,6 +115,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKey
     { id: 'anthropic', name: 'Anthropic', url: 'https://console.anthropic.com/settings/keys', placeholder: 'sk-ant-...' },
     { id: 'openrouter', name: 'OpenRouter', url: 'https://openrouter.ai/keys', placeholder: 'sk-or-...' },
   ];
+
+  const currentSkinSettings = skinSettings.getSettings();
 
   return (
     <div

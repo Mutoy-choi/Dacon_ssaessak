@@ -2,6 +2,10 @@ import { GoogleGenAI, Modality, Type } from "@google/genai";
 import type { Message, LogAnalysis, PetState, EmotionSet, ApiKeys, Model } from '../types';
 import { LEVEL_NAMES } from '../constants';
 import { buildImagePrompt, buildExpressionPrompt, buildEventPrompt } from '../imagePrompts';
+import { imageCache } from '../utils/imageCache';
+import { conversationCache } from '../utils/conversationCache';
+import { petSkinGenerator, skinSettings, type SkinTheme } from '../utils/petSkins';
+import { trackAPICall } from '../components/PerformanceMonitor';
 
 // FIX: Updated to exclusively use `process.env.API_KEY` and conform to `new GoogleGenAI({ apiKey: ... })` initialization.
 const getGoogleAI = () => {
@@ -33,7 +37,19 @@ const analysisSchema = {
 
 // FIX: Removed apiKey parameter to use the centralized `getGoogleAI` function.
 export async function analyzeLog(log: string): Promise<LogAnalysis> {
+  // 캐시 확인
+  const cached = conversationCache.get(log);
+  if (cached) {
+    console.log('✅ Using cached conversation analysis');
+    return {
+      query_summary: cached.summary,
+      emotions: cached.emotions as any,
+      xp: cached.xp
+    };
+  }
+
   try {
+    const startTime = performance.now();
     const ai = getGoogleAI();
     const prompt = `You are an emotion analysis AI for the A. me system. Analyze the user's log entry and provide a summary, calculate Experience Points (XP), and rate 10 emotions on a scale of 0.0 to 10.0.
 
@@ -48,7 +64,17 @@ RULES:
         contents: prompt,
         config: { responseMimeType: 'application/json', responseSchema: analysisSchema },
     });
-    return JSON.parse(response.text.trim());
+    
+    const result = JSON.parse(response.text.trim());
+    
+    // 캐시 저장
+    conversationCache.set(log, result.query_summary, result.emotions, result.xp);
+    
+    // 성능 추적
+    const duration = performance.now() - startTime;
+    console.log(`📊 Analysis took ${duration.toFixed(0)}ms`);
+    
+    return result;
   } catch (error) {
     console.error("Error analyzing log:", error);
     throw new Error("Failed to analyze the log entry.");
@@ -59,10 +85,32 @@ RULES:
  * 펫 이미지 생성 (레벨업, 감정 변화 등)
  * @param prompt - 이미지 생성 프롬프트
  * @param baseImage - 기존 이미지 (연속성 유지용)
+ * @param emotion - 감정 (캐싱용)
+ * @param level - 레벨 (캐싱용)
+ * @param useCache - 캐시 사용 여부
  * @returns Base64 인코딩된 이미지 URL
  */
-export async function generatePetImage(prompt: string, baseImage: {inlineData: {data:string, mimeType: string}} | null = null): Promise<string> {
+export async function generatePetImage(
+    prompt: string,
+    baseImage: {inlineData: {data:string, mimeType: string}} | null = null,
+    emotion?: string,
+    level?: number,
+    useCache: boolean = true
+): Promise<string> {
+    // 테마 가져오기
+    const theme = skinSettings.getSettings().theme;
+    
+    // 캐시 확인 (레벨업 이미지만 캐싱)
+    if (useCache && emotion && level) {
+        const cached = await imageCache.get(emotion, level, theme);
+        if (cached) {
+            console.log('✅ Using cached image');
+            return cached;
+        }
+    }
+
     try {
+        const startTime = performance.now();
         const ai = getGoogleAI();
         const parts: any[] = [{ text: prompt }];
         if (baseImage) parts.unshift(baseImage);
@@ -75,7 +123,17 @@ export async function generatePetImage(prompt: string, baseImage: {inlineData: {
 
         const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (imagePart?.inlineData) {
-            return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+            const imageUrl = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+            
+            // 캐시 저장
+            if (useCache && emotion && level) {
+                await imageCache.set(emotion, level, imageUrl, theme);
+            }
+            
+            const duration = performance.now() - startTime;
+            console.log(`🎨 Image generation took ${duration.toFixed(0)}ms`);
+            
+            return imageUrl;
         }
         throw new Error("No image data found in response");
     } catch (error) {
@@ -85,7 +143,7 @@ export async function generatePetImage(prompt: string, baseImage: {inlineData: {
 }
 
 /**
- * 레벨업시 이벤트 이미지 생성
+ * 레벨업시 이벤트 이미지 생성 (테마 적용)
  */
 export async function generateLevelUpImage(
     petType: 'hatchi',
@@ -94,12 +152,13 @@ export async function generateLevelUpImage(
     levelName: string,
     baseImage: {inlineData: {data:string, mimeType: string}} | null = null
 ): Promise<string> {
-    const prompt = buildEventPrompt(petType, level, 'levelup', levelName);
-    return generatePetImage(prompt, baseImage);
+    const theme = skinSettings.getSettings().theme;
+    const prompt = petSkinGenerator.generateLevelUpPrompt(level, theme);
+    return generatePetImage(prompt, baseImage, emotion, level, true);
 }
 
 /**
- * 감정 기반 표정 변화 이미지 생성 (실시간 대화용)
+ * 감정 기반 표정 변화 이미지 생성 (실시간 대화용, 테마 적용)
  */
 export async function generateEmotionExpression(
     petType: 'hatchi',
@@ -107,13 +166,14 @@ export async function generateEmotionExpression(
     intensity: number,
     baseImage: {inlineData: {data:string, mimeType: string}} | null = null
 ): Promise<string> {
-    const prompt = buildExpressionPrompt(petType, emotion as any, intensity);
-    return generatePetImage(prompt, baseImage);
+    const theme = skinSettings.getSettings().theme;
+    const prompt = petSkinGenerator.generateExpressionPrompt(emotion, intensity, theme);
+    return generatePetImage(prompt, baseImage, emotion, undefined, false); // 실시간 표정은 캐싱 안함
 }
 
 /**
  * 대화 중 감정 분석 후 실시간 표정 업데이트
- * (Nano Banana 스타일 - 미세한 변화)
+ * (Nano Banana 스타일 - 미세한 변화, 테마 적용)
  */
 export async function updateLiveExpression(
     currentImageUrl: string | null,
@@ -135,11 +195,12 @@ export async function updateLiveExpression(
 
         const baseImage = { inlineData: { data, mimeType } };
         
-        // 미세한 표정 변화를 위한 프롬프트 (Nano Banana 스타일)
-        const prompt = buildExpressionPrompt(petType, emotion as any, intensity);
-        const updatedPrompt = `${prompt} IMPORTANT: Make only subtle changes to the facial expression. Keep the overall character design, colors, and style identical. Only adjust eyes, mouth, and minor emotional details.`;
+        // 테마 적용 프롬프트
+        const theme = skinSettings.getSettings().theme;
+        const prompt = petSkinGenerator.generateExpressionPrompt(emotion, intensity, theme);
+        const updatedPrompt = `${prompt}\n\nIMPORTANT: Make only subtle changes to the facial expression. Keep the overall character design, colors, and style identical. Only adjust eyes, mouth, and minor emotional details.`;
         
-        return await generatePetImage(updatedPrompt, baseImage);
+        return await generatePetImage(updatedPrompt, baseImage, undefined, undefined, false);
     } catch (error) {
         console.error('Failed to update live expression:', error);
         return null; // 실패시 기존 이미지 유지

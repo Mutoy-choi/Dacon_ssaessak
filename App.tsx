@@ -7,6 +7,7 @@ import { PetSetup } from './components/PetSetup';
 import { PetDashboard } from './components/PetDashboard';
 import { SettingsModal } from './components/SettingsModal';
 import { ThemeToggle } from './components/ThemeToggle';
+import { PerformanceMonitor } from './components/PerformanceMonitor';
 import { MenuIcon } from './components/icons';
 import type { Message, Model, PetState, PetType, Emotion, ApiKeys, LogAnalysis } from './types';
 import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection, updateLiveExpression } from './services/llmService';
@@ -15,6 +16,8 @@ import { HATCHI_IMAGE } from './assets/petImages';
 import { buildImagePrompt } from './imagePrompts';
 import { getTheme, setTheme, initTheme, toggleTheme as toggleThemeUtil } from './utils/theme';
 import { triggerLevelUpAnimation, triggerExpGainAnimation, fadeTransition, createParticles } from './utils/animations';
+import { imageCache } from './utils/imageCache';
+import { conversationCache } from './utils/conversationCache';
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -24,6 +27,7 @@ const App: React.FC = () => {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isDashboardOpen, setDashboardOpen] = useState(false);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
+  const [isPerformanceOpen, setPerformanceOpen] = useState(false);
   const [petState, setPetState] = useState<PetState | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKeys>({});
   const [theme, setThemeState] = useState<'light' | 'dark'>('dark');
@@ -285,6 +289,7 @@ const App: React.FC = () => {
     <div ref={containerRef} className="flex h-screen overflow-hidden bg-gray-900 dark:bg-gray-900 text-gray-100 dark:text-gray-100 font-sans transition-colors duration-300">
       {isDashboardOpen && <PetDashboard petState={petState} onClose={() => setDashboardOpen(false)} />}
       {isSettingsOpen && <SettingsModal apiKeys={apiKeys} setApiKeys={setApiKeys} onClose={() => setSettingsOpen(false)} />}
+      {isPerformanceOpen && <PerformanceMonitor isOpen={isPerformanceOpen} onClose={() => setPerformanceOpen(false)} />}
       <div
         className={`fixed inset-0 z-20 bg-black bg-opacity-50 transition-opacity lg:hidden ${
           isSidebarOpen ? 'block' : 'hidden'
@@ -313,6 +318,13 @@ const App: React.FC = () => {
             <p className="text-xs text-gray-400">Provider: {selectedModel.provider}</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPerformanceOpen(true)}
+              className="p-2 rounded-lg bg-gray-700 hover:bg-gray-600 transition-colors"
+              title="성능 모니터"
+            >
+              📊
+            </button>
             <ThemeToggle theme={theme} onToggle={handleThemeToggle} />
             <div className="w-6 lg:hidden"></div>
           </div>
