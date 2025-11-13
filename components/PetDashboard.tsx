@@ -6,6 +6,7 @@ import { CloseIcon } from './icons';
 interface PetDashboardProps {
   petState: PetState;
   onClose: () => void;
+  onImageRegenerate?: () => Promise<void>;
 }
 
 const calculateEmotionProfile = (history: LogEntry[]): { emotion: Emotion; score: number }[] => {
@@ -29,17 +30,29 @@ const calculateEmotionProfile = (history: LogEntry[]): { emotion: Emotion; score
 
 type TimelineItem = (LogEntry & { type: 'log' }) | (MajorEvent & { type: 'event' });
 
-export const PetDashboard: React.FC<PetDashboardProps> = ({ petState, onClose }) => {
+export const PetDashboard: React.FC<PetDashboardProps> = ({ petState, onClose, onImageRegenerate }) => {
   const { name, level, exp, imageUrl, type, majorEvents, logHistory } = petState;
+  const [isRegenerating, setIsRegenerating] = React.useState(false);
 
   const emotionProfile = useMemo(() => calculateEmotionProfile(logHistory), [logHistory]);
-  
+
   const timeline: TimelineItem[] = useMemo(() => {
     const logs: TimelineItem[] = logHistory.map(l => ({ ...l, type: 'log' }));
     const events: TimelineItem[] = majorEvents.map(e => ({ ...e, type: 'event' }));
     return [...logs, ...events].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [logHistory, majorEvents]);
 
+  const handleImageRegenerate = async () => {
+    if (!onImageRegenerate || isRegenerating) return;
+    setIsRegenerating(true);
+    try {
+      await onImageRegenerate();
+    } catch (error) {
+      console.error('Failed to regenerate image:', error);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
 
   const currentLevelExp = LEVEL_THRESHOLDS[level - 1] || 0;
   const nextLevelExp = LEVEL_THRESHOLDS[level] || exp;
@@ -80,6 +93,16 @@ export const PetDashboard: React.FC<PetDashboardProps> = ({ petState, onClose })
                     <h2 className="text-2xl font-bold">{name}</h2>
                     <p className="text-md text-gray-400 capitalize">{levelName} {type}</p>
                     <span className="mt-1 text-sm font-semibold text-purple-300">Level {level}</span>
+
+                    {onImageRegenerate && (
+                        <button
+                            onClick={handleImageRegenerate}
+                            disabled={isRegenerating}
+                            className="mt-3 px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 disabled:from-gray-600 disabled:to-gray-600 text-white text-sm font-semibold rounded-lg transition-all duration-300 shadow-md hover:shadow-lg disabled:cursor-not-allowed"
+                        >
+                            {isRegenerating ? '이미지 생성 중...' : '🎨 이미지 재생성'}
+                        </button>
+                    )}
 
                     <div className="w-full mt-4">
                         <div className="h-3 w-full rounded-full bg-gray-700">
