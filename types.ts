@@ -75,3 +75,8 @@ export type ApiKeys = {
   anthropic?: string;
   openai?: string;
 };
+
+export interface PromptSettings {
+  analysisTemplate: string;
+  systemAppendix: string;
+}

@@ -14,6 +14,7 @@ import {
   getRecentLogs,
   buildRecentContext
 } from '../utils/personaManager';
+import { getPromptSettings, applyLogTemplate } from '../utils/promptSettings';
 
 // FIX: Updated to exclusively use `process.env.API_KEY` and conform to `new GoogleGenAI({ apiKey: ... })` initialization.
 const getGoogleAI = () => {
@@ -22,6 +23,54 @@ const getGoogleAI = () => {
         throw new Error("Gemini API key is not available. Please ensure process.env.API_KEY is set.");
     }
     return new GoogleGenAI({ apiKey: keyToUse });
+};
+
+const extractResponseText = (response: any): string | null => {
+    if (!response) return null;
+
+    const resolveText = (source: any) => {
+        const value = source?.text;
+        if (typeof value === 'function') {
+            try {
+                const result = value.call(source);
+                return typeof result === 'string' ? result : null;
+            } catch (error) {
+                console.warn('Failed to invoke response.text():', error);
+                return null;
+            }
+        }
+        return typeof value === 'string' ? value : null;
+    };
+
+    const directText = resolveText(response) || resolveText(response?.response);
+    if (directText && directText.trim()) {
+        return directText;
+    }
+
+    const candidates = response?.candidates || response?.response?.candidates;
+    const parts = candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+        const aggregated = parts
+            .map((part: any) => {
+                if (typeof part?.text === 'string') return part.text;
+                if (part?.json !== undefined) return JSON.stringify(part.json);
+                if (typeof part?.functionCall?.args === 'object') {
+                    return JSON.stringify(part.functionCall.args);
+                }
+                return '';
+            })
+            .join('');
+        if (aggregated.trim()) {
+            return aggregated;
+        }
+    }
+
+    const outputText = response?.output || response?.response?.output;
+    if (typeof outputText === 'string' && outputText.trim()) {
+        return outputText;
+    }
+
+    return null;
 };
 
 const analysisSchema = {
@@ -43,6 +92,25 @@ const analysisSchema = {
     required: ['query_summary', 'emotions', 'xp'],
 };
 
+const normalizeBase64 = (payload: string | null | undefined): string | null => {
+    if (!payload) return null;
+
+    // Remove all whitespace, newlines, and other non-base64 characters
+    const cleaned = payload
+        .replace(/\s+/g, '')  // Remove all whitespace
+        .replace(/[^A-Za-z0-9+/=]/g, '');  // Remove non-base64 chars
+
+    if (!cleaned.length) return null;
+
+    // Validate base64 format
+    if (!/^[A-Za-z0-9+/]+=*$/.test(cleaned)) {
+        console.warn('⚠️ Invalid Base64 format detected');
+        return null;
+    }
+
+    return cleaned;
+};
+
 // FIX: Removed apiKey parameter to use the centralized `getGoogleAI` function.
 export async function analyzeLog(log: string): Promise<LogAnalysis> {
   // 캐시 확인
@@ -58,34 +126,75 @@ export async function analyzeLog(log: string): Promise<LogAnalysis> {
 
   try {
     const startTime = performance.now();
+
+    // API 키 체크
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      throw new Error('Gemini API key is missing. Please check your environment configuration.');
+    }
+
     const ai = getGoogleAI();
-    const prompt = `You are an emotion analysis AI for the A. me system. Analyze the user's log entry and provide a summary, calculate Experience Points (XP), and rate 10 emotions on a scale of 0.0 to 10.0.
+    const promptSettings = getPromptSettings();
+    const prompt = applyLogTemplate(promptSettings.analysisTemplate, log);
 
-User Log: "${log}"
-
-RULES:
-- XP should be between 5 and 25, based on the length and emotional depth of the log.
-- Your response MUST be a valid JSON object following the provided schema.`;
+    console.log(`📝 Analyzing log: "${log.slice(0, 50)}${log.length > 50 ? '...' : ''}"`);
 
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt,
         config: { responseMimeType: 'application/json', responseSchema: analysisSchema },
     });
-    
-    const result = JSON.parse(response.text.trim());
-    
+
+    const responseText = extractResponseText(response);
+    if (!responseText) {
+        console.error('❌ Gemini returned empty response');
+        throw new Error('Gemini returned an empty analysis response.');
+    }
+
+    let result: LogAnalysis;
+    try {
+        result = JSON.parse(responseText.trim());
+    } catch (parseError) {
+        console.error('❌ JSON parsing failed. Response was:', responseText.slice(0, 200));
+        throw new Error(`Failed to parse analysis response: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
+    }
+
+    // 결과 검증
+    if (!result.query_summary || !result.emotions || typeof result.xp !== 'number') {
+        console.error('❌ Invalid analysis result structure:', result);
+        throw new Error('Analysis result is missing required fields');
+    }
+
     // 캐시 저장
     conversationCache.set(log, result.query_summary, result.emotions, result.xp);
-    
+
     // 성능 추적
     const duration = performance.now() - startTime;
-    console.log(`📊 Analysis took ${duration.toFixed(0)}ms`);
-    
+    console.log(`✅ Analysis completed in ${duration.toFixed(0)}ms`);
+
     return result;
   } catch (error) {
-    console.error("Error analyzing log:", error);
-    throw new Error("Failed to analyze the log entry.");
+    console.error("❌ Error analyzing log:", error);
+
+    // 더 구체적인 에러 메시지
+    if (error instanceof Error) {
+      // API 에러인 경우
+      if (error.message.includes('API key')) {
+        throw new Error('API key error: ' + error.message);
+      }
+      // 네트워크 에러인 경우
+      if (error.message.includes('fetch') || error.message.includes('network')) {
+        throw new Error('Network error: Unable to connect to Gemini API. Please check your internet connection.');
+      }
+      // 파싱 에러인 경우
+      if (error.message.includes('parse') || error.message.includes('JSON')) {
+        throw new Error('Response parsing error: ' + error.message);
+      }
+      // 기타 에러
+      throw new Error(`Failed to analyze log: ${error.message}`);
+    }
+
+    throw new Error("Failed to analyze the log entry. Please check the console for details.");
   }
 }
 
@@ -107,7 +216,7 @@ export async function generatePetImage(
 ): Promise<string> {
     // 테마 가져오기
     const theme = skinSettings.getSettings().theme;
-    
+
     // 캐시 확인 (레벨업 이미지만 캐싱)
     if (useCache && emotion && level) {
         const cached = await imageCache.get(emotion, level, theme);
@@ -121,7 +230,23 @@ export async function generatePetImage(
         const startTime = performance.now();
         const ai = getGoogleAI();
         const parts: any[] = [{ text: prompt }];
-        if (baseImage) parts.unshift(baseImage);
+        if (baseImage) {
+            const cleanData = normalizeBase64(baseImage.inlineData?.data);
+            // 크기 체크: Base64 문자열이 1MB (약 750KB 이미지) 이상이면 제외
+            const MAX_BASE64_SIZE = 1000000; // 1MB
+            if (cleanData && baseImage.inlineData?.mimeType) {
+                if (cleanData.length > MAX_BASE64_SIZE) {
+                    console.warn(`🖼️ Base image too large (${(cleanData.length / 1024).toFixed(0)}KB), generating new image without reference`);
+                } else {
+                    console.log(`✅ Using base image for continuity (${(cleanData.length / 1024).toFixed(0)}KB)`);
+                    parts.unshift({ inlineData: { data: cleanData, mimeType: baseImage.inlineData.mimeType } });
+                }
+            } else {
+                console.warn('🖼️ Base image payload rejected: invalid base64 data or missing mime type.');
+                if (!cleanData) console.warn('  - Clean data is null/empty');
+                if (!baseImage.inlineData?.mimeType) console.warn('  - Mime type is missing');
+            }
+        }
 
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
@@ -131,16 +256,24 @@ export async function generatePetImage(
 
         const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (imagePart?.inlineData) {
-            const imageUrl = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
-            
+            const sanitizedData = normalizeBase64(imagePart.inlineData.data);
+            if (!sanitizedData) {
+                console.error('❌ Received malformed image payload from Gemini');
+                console.error('  - Original data length:', imagePart.inlineData.data?.length || 0);
+                throw new Error('Received malformed image payload from Gemini.');
+            }
+
+            console.log(`✅ Generated image data validated (${(sanitizedData.length / 1024).toFixed(0)}KB)`);
+            const imageUrl = `data:${imagePart.inlineData.mimeType};base64,${sanitizedData}`;
+
             // 캐시 저장
             if (useCache && emotion && level) {
                 await imageCache.set(emotion, level, imageUrl, theme);
             }
-            
+
             const duration = performance.now() - startTime;
             console.log(`🎨 Image generation took ${duration.toFixed(0)}ms`);
-            
+
             return imageUrl;
         }
         throw new Error("No image data found in response");
@@ -196,12 +329,21 @@ export async function updateLiveExpression(
 
         const [header, data] = currentImageUrl.split(',');
         const mimeType = header.match(/:(.*?);/)?.[1];
-        
-        if (!data || !mimeType) {
+        const cleanData = normalizeBase64(data);
+
+        // 크기 체크: 1MB 이상이면 표정 업데이트 건너뛰기
+        const MAX_BASE64_SIZE = 1000000;
+        if (!cleanData || !mimeType) {
+            console.warn('Skipping live expression update: invalid cached image data.');
             return null;
         }
 
-        const baseImage = { inlineData: { data, mimeType } };
+        if (cleanData.length > MAX_BASE64_SIZE) {
+            console.warn(`Skipping live expression update: image too large (${(cleanData.length / 1024).toFixed(0)}KB)`);
+            return null;
+        }
+
+        const baseImage = { inlineData: { data: cleanData, mimeType } };
         
         // 테마 적용 프롬프트
         const theme = skinSettings.getSettings().theme;
@@ -370,11 +512,15 @@ export async function* generateChatResponseStream(
   apiKeys: ApiKeys,
   petState?: PetState
 ): AsyncGenerator<string> {
+        const promptSettings = getPromptSettings();
     // 페르소나 시스템 프롬프트 생성
     let systemPrompt: string | undefined;
     if (petState?.persona && model.provider === 'Google Gemini') {
       const recentContext = buildRecentContext(petState.logHistory);
       systemPrompt = buildSystemPrompt(petState.persona, recentContext);
+            if (promptSettings.systemAppendix.trim()) {
+                systemPrompt = `${systemPrompt}\n\n${promptSettings.systemAppendix.trim()}`;
+            }
       console.log('🧠 Persona System Prompt 적용:', systemPrompt.slice(0, 100) + '...');
     }
 
