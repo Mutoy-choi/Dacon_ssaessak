@@ -10,11 +10,11 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { PerformanceMonitor } from './components/PerformanceMonitor';
 import { MenuIcon } from './components/icons';
 import type { Message, Model, PetState, PetType, Emotion, ApiKeys, LogAnalysis } from './types';
-import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection, updateLiveExpression, updatePersona } from './services/llmService';
+import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection, updateLiveExpression, updatePersona, buildInlineImage } from './services/llmService';
 import { PROVIDERS, LEVEL_THRESHOLDS, LEVEL_NAMES } from './constants';
 import { HATCHI_IMAGE } from './assets/petImages';
 import { buildImagePrompt } from './imagePrompts';
-import { getTheme, setTheme, initTheme, toggleTheme as toggleThemeUtil } from './utils/theme';
+import { getTheme, initTheme, toggleTheme as toggleThemeUtil } from './utils/theme';
 import { triggerLevelUpAnimation, triggerExpGainAnimation, fadeTransition, createParticles } from './utils/animations';
 import { imageCache } from './utils/imageCache';
 import { conversationCache } from './utils/conversationCache';
@@ -93,7 +93,7 @@ const App: React.FC = () => {
     const initialState: PetState = {
         type: 'hatchi',
         name: '해치',
-        level: 1, 
+        level: 1,
         exp: 0,
         dominantEmotion: 'joy',
         imageUrl: HATCHI_IMAGE,
@@ -104,6 +104,38 @@ const App: React.FC = () => {
     setPetState(initialState);
     console.log('🎉 해치 탄생! 초기 페르소나 생성 완료');
   }, []);
+
+  const handleImageRegenerate = useCallback(async () => {
+    if (!petState) return;
+
+    try {
+      addSystemMessage('🎨 이미지를 새로 생성하고 있어요...');
+
+      const currentImageUrl = petState.imageUrl;
+      const levelName = LEVEL_NAMES[petState.level - 1] || "Companion";
+
+      const baseImage = await buildInlineImage(currentImageUrl);
+
+      const newImageUrl = await generateLevelUpImage(
+        petState.type,
+        petState.level,
+        petState.dominantEmotion,
+        levelName,
+        baseImage
+      );
+
+      // Fade transition to new image
+      if (petImageRef.current && newImageUrl) {
+        await fadeTransition(petImageRef.current, newImageUrl, 800);
+      }
+
+      setPetState(prev => prev ? ({ ...prev, imageUrl: newImageUrl }) : null);
+      addSystemMessage('✨ 새로운 이미지가 생성되었어요!');
+    } catch (error) {
+      console.error('Failed to regenerate image:', error);
+      addSystemMessage('❌ 이미지 생성에 실패했어요. 다시 시도해주세요.');
+    }
+  }, [petState]);
   
   const handlePetLog = async (log: string) => {
     if (!petState) return;
@@ -174,27 +206,7 @@ const App: React.FC = () => {
             addSystemMessage(`✨ Your companion is evolving! ✨`);
             const levelName = LEVEL_NAMES[newLevel - 1] || "Companion";
 
-            let baseImage = null;
-            if (currentImageUrl && currentImageUrl.startsWith('data:image')) {
-                const [header, data] = currentImageUrl.split(',');
-                const mimeType = header?.match(/:(.*?);/)?.[1];
-
-                // Normalize base64 data - remove all whitespace and invalid characters
-                const cleanData = data?.replace(/\s+/g, '').replace(/[^A-Za-z0-9+/=]/g, '');
-
-                // 크기 체크: 1MB 이상이면 baseImage 사용 안함
-                const MAX_BASE64_SIZE = 1000000;
-                if (cleanData && mimeType && cleanData.length <= MAX_BASE64_SIZE && cleanData.length > 0) {
-                    // Validate base64 format
-                    if (/^[A-Za-z0-9+/]+=*$/.test(cleanData)) {
-                        baseImage = { inlineData: { data: cleanData, mimeType } };
-                    } else {
-                        console.warn('⚠️ Invalid base64 format in current image, skipping');
-                    }
-                } else if (cleanData && cleanData.length > MAX_BASE64_SIZE) {
-                    console.warn(`⚠️ Skipping base image due to size: ${(cleanData.length / 1024).toFixed(0)}KB`);
-                }
-            }
+      const baseImage = await buildInlineImage(currentImageUrl);
             
             // Use improved image generation with event prompt
             const newImageUrl = await generateLevelUpImage(
@@ -240,7 +252,22 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('Error in handlePetLog:', error);
       const errorId = (Date.now() + 1).toString();
-      const errorMessage: Message = { id: errorId, role: 'model', content: `An error occurred during pet interaction: ${error instanceof Error ? error.message : "Please try again."}` };
+
+      // Create user-friendly error message based on error type
+      let errorContent = "An error occurred during pet interaction. ";
+      if (error instanceof Error) {
+        if (error.message.includes('overloaded') || error.message.includes('503')) {
+          errorContent = "⚠️ The AI service is temporarily overloaded. Your message was saved, but XP couldn't be calculated right now. Please try again in a moment.";
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorContent = "🌐 Network error: Please check your internet connection and try again.";
+        } else if (error.message.includes('API key')) {
+          errorContent = "🔑 API key error: Please check your API configuration in Settings.";
+        } else {
+          errorContent = `❌ ${error.message}`;
+        }
+      }
+
+      const errorMessage: Message = { id: errorId, role: 'model', content: errorContent };
       setMessages(prev => [...prev, errorMessage]);
     }
   };
@@ -250,13 +277,26 @@ const App: React.FC = () => {
     const modelMessage: Message = { id: modelMessageId, role: 'model', content: '' };
     setMessages(prev => [...prev, modelMessage]);
 
-    const stream = generateReflection(petState!, question);
-    for await (const chunk of stream) {
-        setMessages(prev =>
-            prev.map(msg =>
-                msg.id === modelMessageId ? { ...msg, content: msg.content + chunk } : msg
-            )
-        );
+    try {
+      const stream = generateReflection(petState!, question);
+      for await (const chunk of stream) {
+          setMessages(prev =>
+              prev.map(msg =>
+                  msg.id === modelMessageId ? { ...msg, content: msg.content + chunk } : msg
+              )
+          );
+      }
+    } catch (error) {
+      console.error('Error in handlePetReflection:', error);
+      let errorContent = "\n\n❌ Failed to generate reflection.";
+      if (error instanceof Error && (error.message.includes('overloaded') || error.message.includes('503'))) {
+        errorContent = "\n\n⚠️ The AI service is temporarily overloaded. Please try again in a moment.";
+      }
+      setMessages(prev =>
+        prev.map(msg =>
+            msg.id === modelMessageId ? { ...msg, content: msg.content + errorContent } : msg
+        )
+      );
     }
   };
 
@@ -264,18 +304,35 @@ const App: React.FC = () => {
     const modelMessageId = (Date.now() + 1).toString();
     const modelMessage: Message = { id: modelMessageId, role: 'model', content: '' };
     setMessages(prev => [...prev, modelMessage]);
-    
-    // Pass the full history to the stream function
-    const fullHistory = [...messages, ...currentHistory];
 
-    // 페르소나 포함하여 스트림 생성
-    const stream = generateChatResponseStream(selectedModel, fullHistory, prompt, apiKeys, petState);
-    for await (const chunk of stream) {
-        setMessages(prev =>
+    try {
+      // Pass the full history to the stream function
+      const fullHistory = [...messages, ...currentHistory];
+
+      // 페르소나 포함하여 스트림 생성
+      const stream = generateChatResponseStream(selectedModel, fullHistory, prompt, apiKeys, petState);
+      for await (const chunk of stream) {
+          setMessages(prev =>
+          prev.map(msg =>
+              msg.id === modelMessageId ? { ...msg, content: msg.content + chunk } : msg
+          )
+          );
+      }
+    } catch (error) {
+      console.error('Error in streamStandardResponse:', error);
+      let errorContent = "\n\n❌ An error occurred while generating response.";
+      if (error instanceof Error) {
+        if (error.message.includes('overloaded') || error.message.includes('503')) {
+          errorContent = "\n\n⚠️ The AI service is temporarily overloaded. Please try again in a moment.";
+        } else if (error.message.includes('API key')) {
+          errorContent = "\n\n🔑 API key error. Please check your settings.";
+        }
+      }
+      setMessages(prev =>
         prev.map(msg =>
-            msg.id === modelMessageId ? { ...msg, content: msg.content + chunk } : msg
+            msg.id === modelMessageId ? { ...msg, content: msg.content + errorContent } : msg
         )
-        );
+      );
     }
   }
 
@@ -333,7 +390,7 @@ const App: React.FC = () => {
 
   return (
     <div ref={containerRef} className="flex h-screen overflow-hidden bg-gray-900 dark:bg-gray-900 text-gray-100 dark:text-gray-100 font-sans transition-colors duration-300">
-      {isDashboardOpen && <PetDashboard petState={petState} onClose={() => setDashboardOpen(false)} />}
+      {isDashboardOpen && <PetDashboard petState={petState} onClose={() => setDashboardOpen(false)} onImageRegenerate={handleImageRegenerate} />}
       {isSettingsOpen && <SettingsModal apiKeys={apiKeys} setApiKeys={setApiKeys} onClose={() => setSettingsOpen(false)} />}
       {isPerformanceOpen && <PerformanceMonitor isOpen={isPerformanceOpen} onClose={() => setPerformanceOpen(false)} />}
       <div

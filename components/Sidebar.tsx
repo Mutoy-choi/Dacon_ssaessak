@@ -52,7 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }`}
     >
       <div className="flex items-center justify-between border-b border-gray-700 p-4">
-        <h2 className="text-lg font-semibold text-white">A. me Companion</h2>
+        <h2 className="text-lg font-semibold text-white">R.I.M.</h2>
         <button onClick={() => setSidebarOpen(false)} className="text-gray-400 hover:text-white lg:hidden">
           <CloseIcon className="h-6 w-6" />
         </button>

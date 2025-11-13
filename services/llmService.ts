@@ -6,8 +6,8 @@ import { imageCache } from '../utils/imageCache';
 import { conversationCache } from '../utils/conversationCache';
 import { petSkinGenerator, skinSettings, type SkinTheme } from '../utils/petSkins';
 import { trackAPICall } from '../components/PerformanceMonitor';
-import { 
-  buildSystemPrompt, 
+import {
+  buildSystemPrompt,
   buildReflectionPrompt,
   buildPersonaSummaryPrompt,
   calculateAverageEmotions,
@@ -15,6 +15,8 @@ import {
   buildRecentContext
 } from '../utils/personaManager';
 import { getPromptSettings, applyLogTemplate } from '../utils/promptSettings';
+
+const MAX_INLINE_BASE64_SIZE = 1_000_000; // 1MB base64 payload (~750KB image)
 
 // FIX: Updated to exclusively use `process.env.API_KEY` and conform to `new GoogleGenAI({ apiKey: ... })` initialization.
 const getGoogleAI = () => {
@@ -24,6 +26,53 @@ const getGoogleAI = () => {
     }
     return new GoogleGenAI({ apiKey: keyToUse });
 };
+
+/**
+ * Retry utility with exponential backoff for API calls
+ * Handles 503 Service Unavailable and other transient errors
+ */
+async function retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    initialDelay: number = 1000,
+    operationName: string = 'API call'
+): Promise<T> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            if (attempt > 0) {
+                const delay = initialDelay * Math.pow(2, attempt - 1);
+                console.log(`🔄 Retrying ${operationName} (attempt ${attempt + 1}/${maxRetries + 1}) after ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+
+            return await fn();
+        } catch (error: any) {
+            lastError = error instanceof Error ? error : new Error(String(error));
+
+            // Check if error is retryable (503, 429, network errors)
+            const isRetryable =
+                error?.error?.code === 503 ||
+                error?.error?.code === 429 ||
+                error?.error?.status === 'UNAVAILABLE' ||
+                error?.error?.status === 'RESOURCE_EXHAUSTED' ||
+                error?.message?.includes('overloaded') ||
+                error?.message?.includes('rate limit') ||
+                error?.message?.includes('network') ||
+                error?.message?.includes('fetch');
+
+            if (!isRetryable || attempt === maxRetries) {
+                console.error(`❌ ${operationName} failed after ${attempt + 1} attempts:`, error);
+                throw lastError;
+            }
+
+            console.warn(`⚠️ ${operationName} failed (attempt ${attempt + 1}), will retry:`, error?.error?.message || error?.message);
+        }
+    }
+
+    throw lastError || new Error(`${operationName} failed after ${maxRetries + 1} attempts`);
+}
 
 const extractResponseText = (response: any): string | null => {
     if (!response) return null;
@@ -95,21 +144,130 @@ const analysisSchema = {
 const normalizeBase64 = (payload: string | null | undefined): string | null => {
     if (!payload) return null;
 
-    // Remove all whitespace, newlines, and other non-base64 characters
-    const cleaned = payload
-        .replace(/\s+/g, '')  // Remove all whitespace
-        .replace(/[^A-Za-z0-9+/=]/g, '');  // Remove non-base64 chars
+    let cleaned = payload
+        .replace(/\s+/g, '')
+        .replace(/[^A-Za-z0-9+/=]/g, '');
 
     if (!cleaned.length) return null;
 
-    // Validate base64 format
+    const remainder = cleaned.length % 4;
+    if (remainder > 0) {
+        cleaned = cleaned.padEnd(cleaned.length + (4 - remainder), '=');
+    }
+
     if (!/^[A-Za-z0-9+/]+=*$/.test(cleaned)) {
-        console.warn('⚠️ Invalid Base64 format detected');
+        console.warn('⚠️ Invalid Base64 format detected after cleanup');
         return null;
+    }
+
+    if (typeof atob === 'function') {
+        try {
+            atob(cleaned);
+        } catch (error) {
+            console.warn('⚠️ Invalid Base64 payload after normalization', error);
+            return null;
+        }
     }
 
     return cleaned;
 };
+
+const reencodeDataUrl = async (imageUrl: string): Promise<{ data: string; mimeType?: string } | null> => {
+    if (typeof fetch !== 'function') {
+        return null;
+    }
+
+    try {
+        const response = await fetch(imageUrl);
+        const blob = await response.blob();
+        let base64Data: string | null = null;
+        let mimeType: string | undefined;
+
+        if (typeof window !== 'undefined' && typeof FileReader !== 'undefined') {
+            base64Data = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    if (typeof reader.result === 'string') {
+                        const [header, data] = reader.result.split(',');
+                        mimeType = header.match(/:(.*?);/)?.[1];
+                        resolve(data || '');
+                    } else {
+                        reject(new Error('FileReader produced a non-string result.'));
+                    }
+                };
+                reader.onerror = () => reject(reader.error || new Error('Unknown FileReader error.'));
+                reader.readAsDataURL(blob);
+            });
+        } else {
+            const arrayBuffer = await blob.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                const chunk = bytes.subarray(i, i + chunkSize);
+                binary += String.fromCharCode(...chunk);
+            }
+
+            if (typeof btoa === 'function') {
+                base64Data = btoa(binary);
+            } else {
+                const BufferCtor = (globalThis as any)?.Buffer as any;
+                if (BufferCtor) {
+                    base64Data = BufferCtor.from(bytes).toString('base64');
+                }
+            }
+        }
+
+        if (!base64Data) {
+            return null;
+        }
+
+        const normalized = normalizeBase64(base64Data);
+        if (!normalized) {
+            return null;
+        }
+
+        return { data: normalized, mimeType };
+    } catch (error) {
+        console.warn('⚠️ Failed to re-encode base image data URL:', error);
+        return null;
+    }
+};
+
+export async function buildInlineImage(imageUrl: string | null, maxSize: number = MAX_INLINE_BASE64_SIZE): Promise<{ inlineData: { data: string; mimeType: string } } | null> {
+    if (!imageUrl || !imageUrl.startsWith('data:image')) {
+        return null;
+    }
+
+    const [header, rawData] = imageUrl.split(',');
+    let mimeType = header.match(/:(.*?);/)?.[1];
+    let cleanData = normalizeBase64(rawData);
+
+    if (!cleanData) {
+        const rebuilt = await reencodeDataUrl(imageUrl);
+        if (rebuilt) {
+            cleanData = rebuilt.data;
+            mimeType = mimeType || rebuilt.mimeType;
+        }
+    }
+
+    if (!cleanData) {
+        console.warn('🖼️ Base image payload could not be normalized.');
+        return null;
+    }
+
+    if (!mimeType) {
+        console.warn('🖼️ Base image mime type missing, skipping reuse.');
+        return null;
+    }
+
+    if (cleanData.length > maxSize) {
+        console.warn(`🖼️ Base image too large (${(cleanData.length / 1024).toFixed(0)}KB), skipping reuse.`);
+        return null;
+    }
+
+    return { inlineData: { data: cleanData, mimeType } };
+}
 
 // FIX: Removed apiKey parameter to use the centralized `getGoogleAI` function.
 export async function analyzeLog(log: string): Promise<LogAnalysis> {
@@ -139,11 +297,17 @@ export async function analyzeLog(log: string): Promise<LogAnalysis> {
 
     console.log(`📝 Analyzing log: "${log.slice(0, 50)}${log.length > 50 ? '...' : ''}"`);
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json', responseSchema: analysisSchema },
-    });
+    // Use retry logic for API call
+    const response = await retryWithBackoff(
+        async () => await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json', responseSchema: analysisSchema },
+        }),
+        3, // max retries
+        1000, // initial delay
+        'Log analysis'
+    );
 
     const responseText = extractResponseText(response);
     if (!responseText) {
@@ -190,6 +354,10 @@ export async function analyzeLog(log: string): Promise<LogAnalysis> {
       if (error.message.includes('parse') || error.message.includes('JSON')) {
         throw new Error('Response parsing error: ' + error.message);
       }
+      // API 과부하 에러인 경우
+      if (error.message.includes('overloaded') || error.message.includes('503')) {
+        throw new Error('API is currently overloaded. Please try again in a few moments.');
+      }
       // 기타 에러
       throw new Error(`Failed to analyze log: ${error.message}`);
     }
@@ -232,10 +400,8 @@ export async function generatePetImage(
         const parts: any[] = [{ text: prompt }];
         if (baseImage) {
             const cleanData = normalizeBase64(baseImage.inlineData?.data);
-            // 크기 체크: Base64 문자열이 1MB (약 750KB 이미지) 이상이면 제외
-            const MAX_BASE64_SIZE = 1000000; // 1MB
             if (cleanData && baseImage.inlineData?.mimeType) {
-                if (cleanData.length > MAX_BASE64_SIZE) {
+                if (cleanData.length > MAX_INLINE_BASE64_SIZE) {
                     console.warn(`🖼️ Base image too large (${(cleanData.length / 1024).toFixed(0)}KB), generating new image without reference`);
                 } else {
                     console.log(`✅ Using base image for continuity (${(cleanData.length / 1024).toFixed(0)}KB)`);
@@ -248,11 +414,16 @@ export async function generatePetImage(
             }
         }
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: { parts },
-            config: { responseModalities: [Modality.IMAGE] },
-        });
+        const response = await retryWithBackoff(
+            async () => await ai.models.generateContent({
+                model: 'gemini-2.5-flash-image',
+                contents: { parts },
+                config: { responseModalities: [Modality.IMAGE] },
+            }),
+            2, // fewer retries for image generation (more expensive)
+            2000, // longer initial delay
+            'Image generation'
+        );
 
         const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (imagePart?.inlineData) {
@@ -327,23 +498,11 @@ export async function updateLiveExpression(
             return null;
         }
 
-        const [header, data] = currentImageUrl.split(',');
-        const mimeType = header.match(/:(.*?);/)?.[1];
-        const cleanData = normalizeBase64(data);
-
-        // 크기 체크: 1MB 이상이면 표정 업데이트 건너뛰기
-        const MAX_BASE64_SIZE = 1000000;
-        if (!cleanData || !mimeType) {
-            console.warn('Skipping live expression update: invalid cached image data.');
+        const baseImage = await buildInlineImage(currentImageUrl);
+        if (!baseImage) {
+            console.warn('Skipping live expression update: unable to prepare base image.');
             return null;
         }
-
-        if (cleanData.length > MAX_BASE64_SIZE) {
-            console.warn(`Skipping live expression update: image too large (${(cleanData.length / 1024).toFixed(0)}KB)`);
-            return null;
-        }
-
-        const baseImage = { inlineData: { data: cleanData, mimeType } };
         
         // 테마 적용 프롬프트
         const theme = skinSettings.getSettings().theme;
@@ -479,8 +638,8 @@ async function* streamFromAnthropic(modelId: string, history: Message[], newProm
 
 // FIX: Removed apiKey parameter to use the centralized `getGoogleAI` function.
 async function* streamFromGemini(
-  modelId: string, 
-  history: Message[], 
+  modelId: string,
+  history: Message[],
   newPrompt: string,
   systemInstruction?: string
 ): AsyncGenerator<string> {
@@ -488,20 +647,50 @@ async function* streamFromGemini(
     const geminiHistory = history
         .filter(msg => msg.role !== 'system')
         .map(msg => ({ role: msg.role, parts: [{ text: msg.content }] }));
-    try {
-        const config: any = { model: modelId, history: geminiHistory };
-        if (systemInstruction) {
-          config.systemInstruction = systemInstruction;
+
+    let retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount <= maxRetries) {
+        try {
+            const config: any = { model: modelId, history: geminiHistory };
+            if (systemInstruction) {
+                config.systemInstruction = systemInstruction;
+            }
+
+            const chat = ai.chats.create(config);
+            const result = await chat.sendMessageStream({ message: newPrompt });
+
+            for await (const chunk of result) {
+                if (chunk.text) yield chunk.text;
+            }
+            return; // Success, exit
+        } catch (error: any) {
+            // Check if error is retryable
+            const isRetryable =
+                error?.error?.code === 503 ||
+                error?.error?.code === 429 ||
+                error?.error?.status === 'UNAVAILABLE' ||
+                error?.message?.includes('overloaded') ||
+                error?.message?.includes('rate limit');
+
+            if (isRetryable && retryCount < maxRetries) {
+                retryCount++;
+                const delay = 1000 * Math.pow(2, retryCount - 1);
+                console.warn(`⚠️ Gemini stream failed (attempt ${retryCount}/${maxRetries}), retrying in ${delay}ms...`);
+                yield `\n[Retrying due to API overload...]\n`;
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
+
+            console.error("Error generating response from Gemini:", error);
+            if (error?.error?.code === 503 || error?.message?.includes('overloaded')) {
+                yield "\n\nSorry, the AI service is currently overloaded. Please try again in a few moments.";
+            } else {
+                yield "\n\nSorry, I encountered an error communicating with the AI. Please try again.";
+            }
+            return;
         }
-        
-        const chat = ai.chats.create(config);
-        const result = await chat.sendMessageStream({ message: newPrompt });
-        for await (const chunk of result) {
-            if (chunk.text) yield chunk.text;
-        }
-    } catch (error) {
-        console.error("Error generating response from Gemini:", error);
-        yield "Sorry, I encountered an error communicating with the AI.";
     }
 }
 
@@ -548,22 +737,49 @@ export async function* generateChatResponseStream(
 // FIX: Removed apiKey parameter to use the centralized `getGoogleAI` function.
 export async function* generateReflection(petState: PetState, question: string): AsyncGenerator<string> {
     const ai = getGoogleAI();
-    
+
     // 페르소나 기반 성찰 프롬프트 생성
     const systemInstruction = buildReflectionPrompt(petState.persona, petState);
     console.log('🧘 Reflection Prompt 생성 완료');
-    
+
     const myContext = `최근 우리의 대화를 돌아보면서 당신께 이야기하고 싶어요.`;
     const prompt = `${myContext}\n\n당신이 묻는 것: "${question}"`;
 
-    const stream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-pro',
-        contents: prompt,
-        config: { systemInstruction }
-    });
+    let retryCount = 0;
+    const maxRetries = 3;
 
-    for await (const chunk of stream) {
-        if (chunk.text) yield chunk.text;
+    while (retryCount <= maxRetries) {
+        try {
+            const stream = await ai.models.generateContentStream({
+                model: 'gemini-2.5-pro',
+                contents: prompt,
+                config: { systemInstruction }
+            });
+
+            for await (const chunk of stream) {
+                if (chunk.text) yield chunk.text;
+            }
+            return; // Success
+        } catch (error: any) {
+            const isRetryable =
+                error?.error?.code === 503 ||
+                error?.error?.code === 429 ||
+                error?.error?.status === 'UNAVAILABLE' ||
+                error?.message?.includes('overloaded');
+
+            if (isRetryable && retryCount < maxRetries) {
+                retryCount++;
+                const delay = 1000 * Math.pow(2, retryCount - 1);
+                console.warn(`⚠️ Reflection failed (attempt ${retryCount}/${maxRetries}), retrying in ${delay}ms...`);
+                yield `\n[Retrying...]\n`;
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
+
+            console.error("Error generating reflection:", error);
+            yield "\n\nSorry, I couldn't complete the reflection right now. Please try again later.";
+            return;
+        }
     }
 }
 
@@ -578,14 +794,19 @@ export async function updatePersona(petState: PetState): Promise<PetPersona> {
     console.log('🔄 페르소나 업데이트 시작... (최근 10개 대화 분석)');
     
     try {
-        const result = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: { 
-                responseMimeType: 'application/json',
-                temperature: 0.7
-            }
-        });
+        const result = await retryWithBackoff(
+            async () => await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt,
+                config: {
+                    responseMimeType: 'application/json',
+                    temperature: 0.7
+                }
+            }),
+            3,
+            1000,
+            'Persona update'
+        );
         
         const responseText = result.text.trim();
         console.log('📊 LLM 응답:', responseText.slice(0, 200) + '...');
