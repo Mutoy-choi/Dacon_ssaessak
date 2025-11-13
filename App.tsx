@@ -173,13 +173,26 @@ const App: React.FC = () => {
         if (leveledUp) {
             addSystemMessage(`✨ Your companion is evolving! ✨`);
             const levelName = LEVEL_NAMES[newLevel - 1] || "Companion";
-            
+
             let baseImage = null;
             if (currentImageUrl && currentImageUrl.startsWith('data:image')) {
                 const [header, data] = currentImageUrl.split(',');
-                const mimeType = header.match(/:(.*?);/)?.[1];
-                if (data && mimeType) {
-                    baseImage = { inlineData: { data, mimeType } };
+                const mimeType = header?.match(/:(.*?);/)?.[1];
+
+                // Normalize base64 data - remove all whitespace and invalid characters
+                const cleanData = data?.replace(/\s+/g, '').replace(/[^A-Za-z0-9+/=]/g, '');
+
+                // 크기 체크: 1MB 이상이면 baseImage 사용 안함
+                const MAX_BASE64_SIZE = 1000000;
+                if (cleanData && mimeType && cleanData.length <= MAX_BASE64_SIZE && cleanData.length > 0) {
+                    // Validate base64 format
+                    if (/^[A-Za-z0-9+/]+=*$/.test(cleanData)) {
+                        baseImage = { inlineData: { data: cleanData, mimeType } };
+                    } else {
+                        console.warn('⚠️ Invalid base64 format in current image, skipping');
+                    }
+                } else if (cleanData && cleanData.length > MAX_BASE64_SIZE) {
+                    console.warn(`⚠️ Skipping base image due to size: ${(cleanData.length / 1024).toFixed(0)}KB`);
                 }
             }
             

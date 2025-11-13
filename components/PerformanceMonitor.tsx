@@ -443,4 +443,4 @@ const MetricCard: React.FC<MetricCardProps> = ({ label, value, color, small }) =
   );
 };
 
-export { tracker, trackAPICall };
+export { tracker };

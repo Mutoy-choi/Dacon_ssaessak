@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { ApiKeys } from '../types';
+import type { ApiKeys, PromptSettings } from '../types';
 import { CloseIcon } from './icons';
 import { downloadBackup, uploadBackup, clearAllData } from '../utils/storage';
 import { imageCache, cacheUtils } from '../utils/imageCache';
 import { conversationCache, conversationCacheUtils } from '../utils/conversationCache';
 import { skinSettings, skinUtils, type SkinTheme } from '../utils/petSkins';
+import { getPromptSettings, savePromptSettings, DEFAULT_PROMPT_SETTINGS } from '../utils/promptSettings';
 
 interface SettingsModalProps {
   apiKeys: ApiKeys;
@@ -17,6 +18,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKey
   const [cacheStats, setCacheStats] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'api' | 'data' | 'cache' | 'skin'>('api');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [promptSettingsState, setPromptSettingsState] = useState<PromptSettings>(() => getPromptSettings());
 
   // Load cache stats
   useEffect(() => {
@@ -32,6 +34,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKey
 
   const handleSave = () => {
     setApiKeys(keys);
+    savePromptSettings(promptSettingsState);
     onClose();
   };
 
@@ -108,6 +111,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKey
     alert(`✅ 강화된 이펙트가 ${newValue ? '활성화' : '비활성화'}되었습니다.`);
   };
 
+  const handlePromptChange = (field: keyof PromptSettings, value: string) => {
+    setPromptSettingsState(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleRestorePromptDefaults = () => {
+    setPromptSettingsState({ ...DEFAULT_PROMPT_SETTINGS });
+  };
+
   // FIX: Removed Google Gemini from the list of providers to prevent users from adding their own key,
   // in compliance with the guideline to exclusively use `process.env.API_KEY`.
   const providers: { id: keyof ApiKeys; name: string; url: string; placeholder: string }[] = [
@@ -124,14 +135,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKey
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg rounded-xl bg-gray-800 text-white shadow-2xl m-4"
+        className="relative w-full max-w-lg max-h-[90vh] rounded-xl bg-gray-800 text-white shadow-2xl m-4 flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">
+        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white z-10">
           <CloseIcon className="h-6 w-6" />
         </button>
 
-        <div className="p-8">
+        <div className="p-8 overflow-y-auto">
           <h1 className="text-2xl font-bold mb-4">⚙️ Settings</h1>
           <p className="text-sm text-gray-400 mb-6">
             API keys are stored securely in your browser's local storage and are never sent to our servers. Your Google Gemini key is configured via environment variables and used for pet-related features.
@@ -168,6 +179,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ apiKeys, setApiKey
                   </p>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Data Management Section */}
+          <div className="mb-6 border-t border-gray-700 pt-6">
+            <h2 className="text-lg font-semibold mb-3 text-purple-300">🧠 Prompt Settings</h2>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="analysis-template" className="block text-sm font-medium text-gray-300">
+                  Log Analysis Prompt Template
+                </label>
+                <textarea
+                  id="analysis-template"
+                  value={promptSettingsState.analysisTemplate}
+                  onChange={(e) => handlePromptChange('analysisTemplate', e.target.value)}
+                  rows={6}
+                  className="mt-1 block w-full rounded-md border-none bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  Use <code className="bg-gray-800 px-1 py-0.5 rounded">{'{{log}}'}</code> where the user entry should be inserted.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="system-appendix" className="block text-sm font-medium text-gray-300">
+                  Extra System Instructions
+                </label>
+                <textarea
+                  id="system-appendix"
+                  value={promptSettingsState.systemAppendix}
+                  onChange={(e) => handlePromptChange('systemAppendix', e.target.value)}
+                  rows={4}
+                  placeholder="Optional instructions appended to the persona system prompt."
+                  className="mt-1 block w-full rounded-md border-none bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  These instructions are appended to 해치's system prompt when using Gemini models.
+                </p>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={handleRestorePromptDefaults}
+                  className="rounded-md bg-gray-700 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-600"
+                >
+                  Restore Defaults
+                </button>
+              </div>
             </div>
           </div>
 
