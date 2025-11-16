@@ -19,11 +19,11 @@ import ragService from './ragService';
 
 const MAX_INLINE_BASE64_SIZE = 1_000_000; // 1MB base64 payload (~750KB image)
 
-// FIX: Updated to exclusively use `process.env.API_KEY` and conform to `new GoogleGenAI({ apiKey: ... })` initialization.
+// Use GEMINI_API_KEY from .env.local
 const getGoogleAI = () => {
-    const keyToUse = process.env.API_KEY;
+    const keyToUse = process.env.GEMINI_API_KEY;
     if (!keyToUse) {
-        throw new Error("Gemini API key is not available. Please ensure process.env.API_KEY is set.");
+        throw new Error("Gemini API key is not available. Please ensure GEMINI_API_KEY is set in .env.local");
     }
     return new GoogleGenAI({ apiKey: keyToUse });
 };
@@ -704,8 +704,9 @@ export async function* generateChatResponseStream(
 ): AsyncGenerator<string> {
     const promptSettings = getPromptSettings();
     
-    // 🔥 RAG: 상담 사례 검색
+    // 🔥 RAG: 상담 사례 검색 (Supabase는 브라우저 호환!)
     let ragPrompt = '';
+    
     try {
       if (petState?.persona) {
         // 사용자의 상위 3개 감정 추출
@@ -714,6 +715,12 @@ export async function* generateChatResponseStream(
           .slice(0, 3)
           .map(([emotion]) => emotion);
         
+        console.log('🔍 RAG 검색 시작:', {
+          query: newPrompt.substring(0, 50),
+          topEmotions,
+          emotionalProfile: petState.persona.emotionalProfile
+        });
+        
         // Hybrid Search로 관련 상담 사례 검색
         const retrievedCases = await ragService.retrieveRelevantCases(
           newPrompt,
@@ -721,10 +728,16 @@ export async function* generateChatResponseStream(
           topEmotions
         );
         
+        console.log('🔍 RAG 검색 결과:', retrievedCases.length, '건');
+        
         if (retrievedCases.length > 0) {
           ragPrompt = ragService.buildRAGPrompt(newPrompt, retrievedCases, petState.persona);
-          console.log(`🔍 RAG: ${retrievedCases.length}개 상담 사례 검색 완료`);
+          console.log(`✅ RAG: ${retrievedCases.length}개 상담 사례 검색 완료`);
+        } else {
+          console.log('⚠️ RAG: 매칭되는 상담 사례 없음');
         }
+      } else {
+        console.log('⚠️ RAG: petState.persona가 없음');
       }
     } catch (error) {
       console.warn('⚠️ RAG 검색 실패 (서비스 계속 진행):', error);

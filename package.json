@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "upload-counseling": "tsx scripts/uploadCounselingData.ts"
+    "upload-counseling": "tsx scripts/uploadCounselingData.ts",
+    "reset-upload": "tsx scripts/resetAndUpload.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
     "@pinecone-database/pinecone": "^6.1.3",
+    "@supabase/supabase-js": "^2.81.1",
     "dompurify": "^3.1.6",
     "dotenv": "^17.2.3",
     "hangul-js": "^0.2.6",

@@ -44,7 +44,7 @@ const App: React.FC = () => {
     setThemeState(getTheme());
   }, []);
   
-  // Initialize RAG service
+  // Initialize RAG service (Supabase는 브라우저 호환!)
   useEffect(() => {
     ragService.initialize().catch(error => {
       console.warn('⚠️ RAG 서비스 초기화 실패 (선택적 기능):', error);
@@ -214,7 +214,7 @@ const App: React.FC = () => {
             addSystemMessage(`✨ Your companion is evolving! ✨`);
             const levelName = LEVEL_NAMES[newLevel - 1] || "Companion";
 
-      const baseImage = await buildInlineImage(currentImageUrl);
+            const baseImage = await buildInlineImage(currentImageUrl);
             
             // Use improved image generation with event prompt
             const newImageUrl = await generateLevelUpImage(
