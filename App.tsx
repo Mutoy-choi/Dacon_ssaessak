@@ -13,6 +13,7 @@ import type { Message, Model, PetState, PetType, Emotion, ApiKeys, LogAnalysis }
 import { generateChatResponseStream, analyzeLog, generateLevelUpImage, generateReflection, updateLiveExpression, updatePersona, buildInlineImage } from './services/llmService';
 import { PROVIDERS, LEVEL_THRESHOLDS, LEVEL_NAMES } from './constants';
 import { HATCHI_IMAGE } from './assets/petImages';
+import ragService from './services/ragService';
 import { buildImagePrompt } from './imagePrompts';
 import { getTheme, initTheme, toggleTheme as toggleThemeUtil } from './utils/theme';
 import { triggerLevelUpAnimation, triggerExpGainAnimation, fadeTransition, createParticles } from './utils/animations';
@@ -41,6 +42,13 @@ const App: React.FC = () => {
   useEffect(() => {
     initTheme();
     setThemeState(getTheme());
+  }, []);
+  
+  // Initialize RAG service (Supabase는 브라우저 호환!)
+  useEffect(() => {
+    ragService.initialize().catch(error => {
+      console.warn('⚠️ RAG 서비스 초기화 실패 (선택적 기능):', error);
+    });
   }, []);
 
   // Toggle theme handler
@@ -206,7 +214,7 @@ const App: React.FC = () => {
             addSystemMessage(`✨ Your companion is evolving! ✨`);
             const levelName = LEVEL_NAMES[newLevel - 1] || "Companion";
 
-      const baseImage = await buildInlineImage(currentImageUrl);
+            const baseImage = await buildInlineImage(currentImageUrl);
             
             // Use improved image generation with event prompt
             const newImageUrl = await generateLevelUpImage(

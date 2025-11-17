@@ -15,14 +15,15 @@ import {
   buildRecentContext
 } from '../utils/personaManager';
 import { getPromptSettings, applyLogTemplate } from '../utils/promptSettings';
+import ragService from './ragService';
 
 const MAX_INLINE_BASE64_SIZE = 1_000_000; // 1MB base64 payload (~750KB image)
 
-// FIX: Updated to exclusively use `process.env.API_KEY` and conform to `new GoogleGenAI({ apiKey: ... })` initialization.
+// Use GEMINI_API_KEY from .env.local
 const getGoogleAI = () => {
-    const keyToUse = process.env.API_KEY;
+    const keyToUse = process.env.GEMINI_API_KEY;
     if (!keyToUse) {
-        throw new Error("Gemini API key is not available. Please ensure process.env.API_KEY is set.");
+        throw new Error("Gemini API key is not available. Please ensure GEMINI_API_KEY is set in .env.local");
     }
     return new GoogleGenAI({ apiKey: keyToUse });
 };
@@ -701,15 +702,64 @@ export async function* generateChatResponseStream(
   apiKeys: ApiKeys,
   petState?: PetState
 ): AsyncGenerator<string> {
-        const promptSettings = getPromptSettings();
+    const promptSettings = getPromptSettings();
+    
+    // 🔥 RAG: 상담 사례 검색 (Supabase는 브라우저 호환!)
+    let ragPrompt = '';
+    
+    try {
+      if (petState?.persona) {
+        // 사용자의 상위 3개 감정 추출
+        const topEmotions = Object.entries(petState.persona.emotionalProfile)
+          .sort(([, a], [, b]) => b - a)
+          .slice(0, 3)
+          .map(([emotion]) => emotion);
+        
+        console.log('🔍 RAG 검색 시작:', {
+          query: newPrompt.substring(0, 50),
+          topEmotions,
+          emotionalProfile: petState.persona.emotionalProfile
+        });
+        
+        console.log('📝 RAG 검색 쿼리 전문:', newPrompt);
+        
+        // Hybrid Search로 관련 상담 사례 검색
+        const retrievedCases = await ragService.retrieveRelevantCases(
+          newPrompt,
+          5, // Top-5 cases
+          topEmotions
+        );
+        
+        console.log('🔍 RAG 검색 결과:', retrievedCases.length, '건');
+        
+        if (retrievedCases.length > 0) {
+          ragPrompt = ragService.buildRAGPrompt(newPrompt, retrievedCases, petState.persona);
+          console.log(`✅ RAG: ${retrievedCases.length}개 상담 사례 검색 완료`);
+          console.log('📋 검색된 사례 ID:', retrievedCases.map(c => c.id).join(', '));
+        } else {
+          console.log('⚠️ RAG: 매칭되는 상담 사례 없음');
+        }
+      } else {
+        console.log('⚠️ RAG: petState.persona가 없음');
+      }
+    } catch (error) {
+      console.warn('⚠️ RAG 검색 실패 (서비스 계속 진행):', error);
+    }
+    
     // 페르소나 시스템 프롬프트 생성
     let systemPrompt: string | undefined;
     if (petState?.persona && model.provider === 'Google Gemini') {
       const recentContext = buildRecentContext(petState.logHistory);
       systemPrompt = buildSystemPrompt(petState.persona, recentContext);
-            if (promptSettings.systemAppendix.trim()) {
-                systemPrompt = `${systemPrompt}\n\n${promptSettings.systemAppendix.trim()}`;
-            }
+      
+      // RAG 프롬프트 추가
+      if (ragPrompt) {
+        systemPrompt = `${systemPrompt}\n\n${ragPrompt}`;
+      }
+      
+      if (promptSettings.systemAppendix.trim()) {
+        systemPrompt = `${systemPrompt}\n\n${promptSettings.systemAppendix.trim()}`;
+      }
       console.log('🧠 Persona System Prompt 적용:', systemPrompt.slice(0, 100) + '...');
     }
 
