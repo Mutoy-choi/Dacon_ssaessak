@@ -266,6 +266,8 @@ class RAGService {
         emotionContext
       });
       
+      console.log('📝 검색 쿼리 전문:', userQuery);
+      
       // 1. 쿼리 임베딩 생성
       const queryEmbedding = await this.createEmbedding(userQuery);
       console.log('✅ 임베딩 생성 완료:', queryEmbedding.slice(0, 5));
@@ -325,9 +327,19 @@ class RAGService {
       });
 
       // 4. Hybrid Score로 정렬 후 상위 topK 반환
-      return scoredResults
+      const topResults = scoredResults
         .sort((a, b) => b.similarity - a.similarity)
         .slice(0, topK);
+      
+      // 상위 결과 로그
+      console.log('🎯 상위 검색 결과:', topResults.map(r => ({
+        id: r.id,
+        similarity: r.similarity.toFixed(3),
+        inputPreview: r.input.substring(0, 60) + '...',
+        outputPreview: r.output.substring(0, 60) + '...'
+      })));
+      
+      return topResults;
     } catch (error) {
       console.error('❌ RAG 검색 실패:', error);
       return [];

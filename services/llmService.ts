@@ -721,6 +721,8 @@ export async function* generateChatResponseStream(
           emotionalProfile: petState.persona.emotionalProfile
         });
         
+        console.log('📝 RAG 검색 쿼리 전문:', newPrompt);
+        
         // Hybrid Search로 관련 상담 사례 검색
         const retrievedCases = await ragService.retrieveRelevantCases(
           newPrompt,
@@ -733,6 +735,7 @@ export async function* generateChatResponseStream(
         if (retrievedCases.length > 0) {
           ragPrompt = ragService.buildRAGPrompt(newPrompt, retrievedCases, petState.persona);
           console.log(`✅ RAG: ${retrievedCases.length}개 상담 사례 검색 완료`);
+          console.log('📋 검색된 사례 ID:', retrievedCases.map(c => c.id).join(', '));
         } else {
           console.log('⚠️ RAG: 매칭되는 상담 사례 없음');
         }
