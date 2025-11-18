@@ -326,18 +326,29 @@ class RAGService {
         };
       });
 
-      // 4. Hybrid Score로 정렬 후 상위 topK 반환
-      const topResults = scoredResults
-        .sort((a, b) => b.similarity - a.similarity)
+      // 4. Hybrid Score로 정렬 후 similarity 0.65 이상만 필터링
+      const sortedResults = scoredResults.sort((a, b) => b.similarity - a.similarity);
+      
+      // similarity가 0.65 이상인 결과만 필터링하고 topK만큼만 반환
+      const MIN_SIMILARITY_THRESHOLD = 0.65;
+      const topResults = sortedResults
+        .filter(r => r.similarity >= MIN_SIMILARITY_THRESHOLD)
         .slice(0, topK);
       
+      // 필터링 결과 로그
+      console.log(`🔍 유사도 필터링: 전체 ${sortedResults.length}개 중 ${topResults.length}개 (threshold: ${MIN_SIMILARITY_THRESHOLD})`);
+      
       // 상위 결과 로그
-      console.log('🎯 상위 검색 결과:', topResults.map(r => ({
-        id: r.id,
-        similarity: r.similarity.toFixed(3),
-        inputPreview: r.input.substring(0, 60) + '...',
-        outputPreview: r.output.substring(0, 60) + '...'
-      })));
+      if (topResults.length > 0) {
+        console.log('🎯 상위 검색 결과:', topResults.map(r => ({
+          id: r.id,
+          similarity: r.similarity.toFixed(3),
+          inputPreview: r.input.substring(0, 60) + '...',
+          outputPreview: r.output.substring(0, 60) + '...'
+        })));
+      } else {
+        console.log('⚠️ 유사도 0.65 이상인 결과가 없습니다.');
+      }
       
       return topResults;
     } catch (error) {
